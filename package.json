@@ -1,0 +1,24 @@
+{
+  "name": "car-shopper",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Car Shopper - async car comparison jobs with local AI vision, realtime on Convex",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && node --experimental-strip-types scripts/build_frontend.ts",
+    "test": "vitest run",
+    "worker": "node --experimental-strip-types worker/index.ts",
+    "check": "npx convex check"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "convex": "^1.45.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  },
+  "dependencies": {
+    "@convex-dev/static-hosting": "latest",
+    "esbuild": "^0.28.2"
+  }
+}

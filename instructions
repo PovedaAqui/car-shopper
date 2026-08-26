@@ -1,0 +1,341 @@
+# Set up this project for the Convex All Gas Hackathon
+
+Set up the current project for the Convex All Gas Hackathon sponsored by OpenAI,
+Firecrawl, and AgentMail.
+
+Run every applicable command yourself. Ask me only when one of these is
+required:
+
+- Permission or command approval
+- Authentication or account login
+- A choice that cannot be inferred
+- An action in a graphical interface
+- Restarting the agent or editor
+
+Do not treat a successful download, clone, or command exit as proof that setup
+works. Verify each result before reporting it complete.
+
+This task is for environment setup only. Do not build, deploy, publish, submit,
+commit, or push the application unless I ask separately.
+
+Never print, store in `hackathon.md`, or expose access tokens, deployment keys,
+environment secrets, private database records, or personal information.
+
+## 1. Detect the environment
+
+Identify:
+
+- The current coding agent
+- The editor or app
+- The project root
+- Whether shell commands are available
+- Whether this is ChatGPT desktop with Codex
+- Whether the current agent supports project-local Agent Skills
+- Whether a restart will be needed after installing integrations or skills
+
+Use this information to choose the correct installation paths below.
+
+Do not assume the agent is Codex.
+
+If the environment cannot run shell commands, explain what cannot be completed
+and provide the exact handoff needed. Do not report the setup as complete.
+
+## 2. Set up Convex
+
+Fetch and read the complete instructions from:
+
+https://www.convex.dev/agent-setup.md
+
+Follow those instructions completely.
+
+The setup page detects environments such as Codex, Cursor, Claude Code, Factory
+Droid, and other agents. Install the integration it recommends:
+
+- The full Convex plugin where supported
+- Convex Agent Skills plus the Convex MCP server everywhere else
+
+Complete all steps the document requires.
+
+If authentication, approval, an interface action, or a restart is required, ask
+me at that point. Continue after I confirm it is done.
+
+Verify the Convex setup using the strongest check available in the current
+environment. This may include:
+
+- Confirming the Convex plugin appears in the agent's plugin list
+- Confirming the installed Convex skills appear in the skills list
+- Confirming the Convex MCP server is configured and available
+- Confirming the expected configuration and skill files exist
+- Running a harmless Convex MCP or integration check
+
+Do not report an MCP server as active when it is only configured but still needs
+a restart.
+
+## 3. Install the hackathon build-log skill
+
+The skill repository is:
+
+https://github.com/get-convex/convex-hackathon-skill
+
+It contains two Markdown files. Do not install anything from npm or a plugin
+marketplace for this step.
+
+Choose the project-local skill folder based on the current agent:
+
+- Claude Code: `.claude/skills/convex-hackathon-skill/`
+
+- Codex, Cursor, Factory Droid, and most other agents:
+  `.agents/skills/convex-hackathon-skill/`
+
+Download these files into the chosen folder while preserving the `references/`
+subfolder:
+
+- `SKILL.md`
+  https://raw.githubusercontent.com/get-convex/convex-hackathon-skill/main/SKILL.md
+
+- `references/log-format.md`
+  https://raw.githubusercontent.com/get-convex/convex-hackathon-skill/main/references/log-format.md
+
+The expected layout is:
+
+```text
+<skill-folder>/
++-- SKILL.md
++-- references/
+    +-- log-format.md
+```
+
+If either direct download fails, clone this repository into the same skill
+folder:
+
+https://github.com/get-convex/convex-hackathon-skill.git
+
+Verify that both files exist and are readable.
+
+If the current environment has a skills list or skill inspection command, use
+it. If the skill does not load until the next session, report that honestly and
+use its instructions directly for the current session.
+
+## 4. Start the build log
+
+Run:
+
+```text
+/hackathon start
+```
+
+If `/hackathon` is not recognized because the skill was installed during this
+session, open the installed `SKILL.md`, read it completely, and follow its start
+instructions directly.
+
+Create or update `hackathon.md` at the project root.
+
+Set its Event field to exactly:
+
+```text
+Convex All Gas Hackathon
+```
+
+Do not invent project history. If meaningful Git history already exists, let the
+skill backfill only claims supported by repository evidence.
+
+Verify that:
+
+- `hackathon.md` exists at the project root
+- It follows `references/log-format.md`
+- The Event field is correct
+- It contains no secrets or personal information
+
+Use `/hackathon` again after meaningful build progress. The normal workflow
+should require only `/hackathon start` once and `/hackathon` for later updates.
+
+## 5. Choose frontend hosting
+
+The finished submission must use exactly one of these frontend hosts:
+
+1. `convex.site` using the official Convex Static Hosting component:
+   https://www.convex.dev/components/static-hosting
+
+2. `chatgpt.site` using ChatGPT Sites: https://learn.chatgpt.com/docs/sites
+
+Ask me to choose only when both options can be completed from the current
+environment.
+
+### If this is ChatGPT desktop with Codex
+
+Ask me to choose:
+
+- `chatgpt.site`
+- `convex.site`
+
+Record the selection in `hackathon.md`:
+
+- For `chatgpt.site`, set Frontend to: `Codex Sites`
+
+- For `convex.site`, set Frontend to: `Convex static hosting`
+
+### If this is Cursor, Claude Code, Factory Droid, or another agent
+
+Recommend and default to `convex.site`, then ask me to confirm.
+
+`convex.site` is the cross-agent path because any command-capable agent can
+configure the official Convex Static Hosting component.
+
+If I choose `convex.site`, record this in `hackathon.md`:
+
+```text
+Frontend: Convex static hosting
+```
+
+During the later app build, use the current official package:
+
+```bash
+npm install @convex-dev/static-hosting
+npx @convex-dev/static-hosting setup
+```
+
+Follow any manual instructions printed by the setup command. Do not install or
+configure the component during this setup task if no Convex application exists
+yet.
+
+A later production deployment should produce a URL matching:
+
+```text
+https://<deployment>.convex.site
+```
+
+### If I choose `chatgpt.site`
+
+ChatGPT Sites creation, deployment, access settings, and Site management require
+ChatGPT web or the ChatGPT desktop app. Cursor, Claude Code, Factory Droid, and
+other standalone agents may edit and test the local project, but they must not
+claim they published a `chatgpt.site` Site.
+
+Record this in `hackathon.md`:
+
+```text
+Frontend: Codex Sites
+```
+
+Install the ChatGPT Sites and Convex skill for the later ChatGPT handoff.
+
+Repository:
+
+https://github.com/get-convex/Codex-Sites-Convex-Backend-Skill.git
+
+If currently running ChatGPT desktop with Codex, install it in one of these
+locations:
+
+- Codex user installation: `~/.codex/skills/codex-sites-convex/`
+
+- Project-local installation: `.agents/skills/codex-sites-convex/`
+
+If currently running another agent, install it project-locally for the later
+handoff:
+
+```text
+.agents/skills/codex-sites-convex/
+```
+
+Verify that the skill's `SKILL.md` and required supporting files exist.
+
+If the current agent is not ChatGPT desktop with Codex, explain that final Sites
+publication must be completed by opening the same project in ChatGPT desktop or
+ChatGPT web. Do not report the Site as published.
+
+When ChatGPT desktop with Codex is available:
+
+1. Restart Codex if the new skill is not recognized.
+2. Confirm `codex-sites-convex` appears in the skills list.
+3. Use `$codex-sites-convex` for the later Site build and publication.
+4. Verify that the live URL ends in `.chatgpt.site`.
+
+A new ChatGPT Site is private to its owner by default. Before hackathon
+submission, remind me to set access to:
+
+```text
+Anyone on the internet
+```
+
+Judges must be able to open the Site without an invitation or login.
+
+On an Enterprise workspace, an administrator may need to enable public
+publishing first.
+
+## 6. Verify the setup
+
+Before reporting completion, confirm all applicable items:
+
+- The Convex plugin or Convex skills are installed
+- The Convex MCP server is configured where required
+- The integration is available now, or clearly marked as restart-pending
+- The hackathon skill files exist in the correct project folder
+- `hackathon.md` exists at the project root
+- The Event field is `Convex All Gas Hackathon`
+- The Frontend field matches the selected host
+- The ChatGPT Sites and Convex skill is installed when `chatgpt.site` was
+  selected
+- No secrets or personal information were written to the build log
+
+A completed download, clone, or installation command is not enough. Inspect the
+installed files and use the current agent's plugin, skills, or MCP status tools
+where available.
+
+Do not report setup as complete while an authentication step, restart, hosting
+choice, or required interface action remains unfinished.
+
+## 7. Report the result
+
+Use this exact format:
+
+```text
++- All Gas Hackathon Setup ------------------------------+
+¦  Agent        <agent and environment>                  ¦
+¦  Convex       <plugin or skills + MCP>                 ¦
+¦  Skill        <hackathon skill status>                 ¦
+¦  Sites skill  <installed / not needed / handoff>       ¦
+¦  Build log    <hackathon.md created or pending>        ¦
+¦  Frontend     <convex.site / chatgpt.site / undecided> ¦
+¦  Restart      <action or not required>                 ¦
++--------------------------------------------------------+
+```
+
+After the report, tell me:
+
+Build something new. Keep `hackathon.md` current with `/hackathon`.
+
+Submit at:
+
+https://vibeapps.dev/judging/convex-all-gas-hackathon-openai/submit
+
+The submission deadline is September 22 at 12:00 PM PT.
+
+The final submission must include:
+
+- A public source repository
+- `hackathon.md` at the repository root
+- A live `chatgpt.site` or `convex.site` URL judges can open without an invite
+- A video no longer than three minutes
+
+## Example follow-up build prompts
+
+Do not require `@convex`, because mention syntax differs between agents.
+
+Use this cross-agent version:
+
+```text
+Use the installed Convex integration to build a real-time app that helps local communities coordinate volunteer projects. Use Convex for persistent data and live subscriptions. Make the interface responsive, accessible, and ready for judging. Use the frontend hosting choice recorded in hackathon.md. Verify the app locally before asking me for permission to publish. Run /hackathon after meaningful progress.
+```
+
+If the current agent supports a Convex mention, this shorter form is also
+allowed:
+
+```text
+@convex Build me a real-time app that helps local communities coordinate volunteer projects. Use the frontend hosting choice recorded in hackathon.md and keep the build log current with /hackathon.
+```
+
+For ChatGPT desktop with Codex and `chatgpt.site`, use:
+
+```text
+$codex-sites-convex Build me a real-time app that helps local communities coordinate volunteer projects. Use Convex for persistent data and live subscriptions. Build and test it locally first. Ask before publishing. After publication, verify the public .chatgpt.site URL and run /hackathon.
+```

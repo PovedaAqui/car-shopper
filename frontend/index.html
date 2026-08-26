@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <meta name="description" content="Car Shopper — ranking calidad/precio de coches de segunda mano con inspección visual por IA local, en tiempo real.">
+  <title>Car Shopper — ranking de coches por €/km en tiempo real</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Car Shopper</h1>
+      <p class="tag">Ranking calidad/precio + inspección visual por IA local · en tiempo real (Convex)</p>
+    </header>
+
+    <main>
+      <!-- Search form -->
+      <section class="card" id="search-card" aria-labelledby="search-h">
+        <h2 id="search-h">Busca tu coche</h2>
+        <form id="search-form">
+          <div class="grid">
+            <label>Marca <input name="make" required value="Toyota" maxlength="40"></label>
+            <label>Modelo <input name="model" required value="Yaris" maxlength="40"></label>
+            <label>Precio máximo (€) <input name="maxPrice" type="number" required min="100" max="1000000" value="5000"></label>
+            <label>Región <input name="region" required value="Barcelona / Zaragoza" maxlength="60"></label>
+            <label>Km máximo (opcional) <input name="maxKm" type="number" min="0" placeholder="cualquiera"></label>
+          </div>
+          <button type="submit" id="search-btn">Generar ranking</button>
+          <p class="hint">Free tier: 1 búsqueda/día. El worker local procesa el job y el estado se actualiza en vivo.</p>
+          <div id="form-error" class="error" role="alert" hidden></div>
+        </form>
+      </section>
+
+      <!-- Job dashboard -->
+      <section class="card" id="dashboard" hidden aria-labelledby="dash-h">
+        <h2 id="dash-h">Estado del job</h2>
+        <div id="job-meta" class="meta"></div>
+        <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progress">
+          <div class="bar" id="progress-bar"></div>
+        </div>
+        <p id="stage-text" class="stage" aria-live="polite"></p>
+        <div id="counts" class="counts"></div>
+        <div id="scores"></div>
+        <div id="vision"></div>
+        <div id="report-holder" hidden>
+          <h3>Informe</h3>
+          <a id="report-link" href="#" target="_blank" rel="noopener">Abrir informe completo</a>
+        </div>
+      </section>
+
+      <!-- History -->
+      <section class="card" id="history" hidden aria-labelledby="hist-h">
+        <h2 id="hist-h">Tus búsquedas</h2>
+        <ul id="job-list" class="joblist"></ul>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <p>Datos: fixture de la sesión de referencia 2026-08-26 (coches.net, 20 Toyota Yaris ≤ 5.000 €). La inferencia usa el endpoint local OpenAI-compatible; sin egress a cloud de modelos. Este informe no sustituye una inspección mecánica presencial.</p>
+    </footer>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
