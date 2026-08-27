@@ -11,3 +11,6 @@ dist/
 .local/
 *.local.json
 worker/state/
+
+# Local working state report — never commit/push
+STATE.md

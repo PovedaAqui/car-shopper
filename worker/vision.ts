@@ -11,20 +11,20 @@
  * Backends:
  *  - local OpenAI-compatible endpoint (vLLM default), Ollama, LM Studio via
  *    the provider abstraction (health-gated)
- *  - deterministic reference fixture (the 2026-08-26 session results) when
- *    no local vision model is available (MVP mode: no production egress)
+ *  - deterministic reference fixture (the 2026-08-26 session results) only
+ *    when explicitly enabled with ALLOW_REFERENCE_VISION=1 for demos/tests
  */
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import type { ModelConfig, Health } from "./providers.js";
+import type { ModelConfig, Health } from "./providers.ts";
 import {
   ProviderError,
   chatJson,
   selectProvider,
-} from "./providers.js";
-import { RawListing } from "./scrape.js";
+} from "./providers.ts";
+import type { RawListing } from "./scrape.ts";
 
 export const PROMPT_VERSION = "vision-v3-3photos";
 const MAX_PHOTOS_PER_CAR = 3;
@@ -50,6 +50,7 @@ export interface VisionResult {
   latencyMs?: number;
   inputTokens?: number;
   outputTokens?: number;
+  rawResponse?: string | null;
 }
 
 function normState(v: unknown, fallback: "no_evaluable"): VisionResult["exteriorState"] {
@@ -119,9 +120,9 @@ async function analyzeWithModel(
   ];
 
   try {
-    const { value, result, error } = await chatJson<any>(cfg, system, userContent, { schemaHint: SCHEMA_HINT, maxTokens: 2048 });
+    const { value, raw, result, error } = await chatJson<any>(cfg, system, userContent, { schemaHint: SCHEMA_HINT, maxTokens: 2048 });
     if (!value) {
-      return noEvaluable(listing.adId, cfg.provider, cfg.model, step, error ?? "respuesta no válida (JSON estricto)");
+      return { ...noEvaluable(listing.adId, cfg.provider, cfg.model, step, error ?? "respuesta no válida (JSON estricto)"), rawResponse: raw || null };
     }
     const isSinVer = value.interior_state === "sin_ver";
     return {
@@ -138,6 +139,7 @@ async function analyzeWithModel(
       color: value.color ?? null,
       redFlags: Array.isArray(value.red_flags) ? value.red_flags.map(String) : [],
       details: value.exterior_details ?? null,
+      rawResponse: raw || null,
       latencyMs: result.latencyMs,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
@@ -189,7 +191,7 @@ export interface VisionOutcome {
 /**
  * Run both vision passes over all listings.
  * - When a healthy local vision model is configured -> live passes (local_inference_only).
- * - Otherwise -> deterministic reference fixture (both passes), flagged as such.
+ * - Otherwise -> honest no_evaluable rows; reference fixtures are opt-in only.
  */
 export async function runVision(
   listings: RawListing[],
@@ -204,10 +206,18 @@ export async function runVision(
     null
   );
 
-  if (!active || !decision) {
-    const primary = listings.map((l) => referenceVision(l, "primary"));
-    const reverify = listings.map((l) => referenceVision(l, "reverify"));
-    return { primary, reverify, providerLabel: "reference-session (fixture determinista)", usedReference: true };
+  if (!active || !decision || active.visionCapable !== true) {
+    if (process.env.ALLOW_REFERENCE_VISION === "1") {
+      const primary = listings.map((l) => referenceVision(l, "primary"));
+      const reverify = listings.map((l) => referenceVision(l, "reverify"));
+      return { primary, reverify, providerLabel: "reference-session (explicit demo fixture)", usedReference: true };
+    }
+    const reason = decision?.fallbackReason ?? health?.detail ?? "no healthy vision-capable provider configured";
+    const provider = active?.provider ?? "none";
+    const model = active?.model ?? "n/a";
+    const primary = listings.map((l) => noEvaluable(l.adId, provider, model, "primary", reason));
+    const reverify = listings.map((l) => noEvaluable(l.adId, provider, model, "reverify", reason));
+    return { primary, reverify, providerLabel: `${provider}/${model} (no vision result)`, usedReference: false };
   }
 
   const primary: VisionResult[] = [];

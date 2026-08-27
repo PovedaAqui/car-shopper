@@ -9,6 +9,9 @@
  */
 
 import { readFileSync } from "node:fs";
+import type { RawListing } from "./scrape.ts";
+import type { VisionResult } from "./vision.ts";
+import type { ConsensusRow } from "./consensus.ts";
 
 export interface WorkerConfig {
   convexUrl: string;
@@ -17,6 +20,28 @@ export interface WorkerConfig {
   apiKey: string;
   workerId: string;
   useDevHeader: boolean;
+}
+
+export interface ClaimedJob {
+  jobId: string;
+  token: string;
+  criteria: {
+    make: string;
+    model: string;
+    maxPrice: number;
+    region: string;
+    maxKm?: number;
+  };
+  requestId?: string;
+}
+
+export interface JobSnapshot {
+  listings: RawListing[];
+  scores: Array<{ adId: string; scorerVersion: string }>;
+  visionPrimary: VisionResult[];
+  visionReverify: VisionResult[];
+  consensus: ConsensusRow[];
+  hasReport: boolean;
 }
 
 export function loadWorkerConfig(): WorkerConfig {
@@ -35,25 +60,37 @@ export function loadWorkerConfig(): WorkerConfig {
     process.env[name] ?? env[name] ?? fallback;
 
   const convexUrl = (pick("CONVEX_URL") ?? "http://127.0.0.1:3210").replace(/\/$/, "");
-  const siteUrl = (pick("CONVEX_SITE_URL") ?? convexUrl).replace(/\/$/, "");
-  // The app HTTP router is mounted under /api (see convex/convex.config.ts,
-  // where the static-hosting component owns the root).
+  const configuredSiteUrl = pick("CONVEX_SITE_URL");
+  const siteUrl = (configuredSiteUrl ?? deriveSiteUrl(convexUrl)).replace(/\/$/, "");
+  // The app HTTP router in convex/http.ts is mounted under /api (see
+  // convex/convex.config.ts, where static hosting owns the root).
   const apiBase = (pick("WORKER_API_BASE") ?? `${siteUrl}/api`).replace(/\/$/, "");
-  const apiKey = pick("WORKER_API_KEY") ?? "";
+  // A deployment key in .env.local may belong to a different Convex
+  // deployment. Self-hosted Convex intentionally supports the dev header;
+  // only an explicitly exported shell key should override that local mode.
+  const isLocalBackend = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(convexUrl);
+  const apiKey = isLocalBackend
+    ? (process.env.WORKER_API_KEY ?? "")
+    : (pick("WORKER_API_KEY") ?? "");
   const useDevHeader = !apiKey;
 
   return { convexUrl, siteUrl, apiBase, apiKey, workerId: `worker-${process.pid}`, useDevHeader };
 }
 
-async function post(url: string, body: unknown, cfg: WorkerConfig): Promise<any> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...(cfg.apiKey ? { "x-worker-key": cfg.apiKey } : { "x-worker-mode": "dev" }),
-    },
-    body: JSON.stringify(body),
-  });
+function deriveSiteUrl(convexUrl: string): string {
+  if (convexUrl.endsWith(":3210")) return `${convexUrl.slice(0, -5)}:3211`;
+  if (convexUrl.endsWith(".convex.cloud")) return convexUrl.replace(/\.convex\.cloud$/, ".convex.site");
+  return convexUrl;
+}
+
+function authHeaders(cfg: WorkerConfig, contentType: string): Record<string, string> {
+  return {
+    "content-type": contentType,
+    ...(cfg.apiKey ? { "x-worker-key": cfg.apiKey } : { "x-worker-mode": "dev" }),
+  };
+}
+
+async function parseJsonResponse(url: string, res: Response): Promise<any> {
   const text = await res.text();
   let data: any;
   try {
@@ -67,39 +104,93 @@ async function post(url: string, body: unknown, cfg: WorkerConfig): Promise<any>
   return data;
 }
 
+async function post(url: string, body: unknown, cfg: WorkerConfig): Promise<any> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: authHeaders(cfg, "application/json"),
+    body: JSON.stringify(body),
+  });
+  return parseJsonResponse(url, res);
+}
+
+function unwrap(data: any): any {
+  return data?.result !== undefined ? data.result : data;
+}
+
 /** Claim the next queued job. Returns null when the queue is empty. */
-export function claimJob(cfg: WorkerConfig) {
-  return post(`${cfg.apiBase}/worker/claim`, { workerId: cfg.workerId }, cfg);
+export async function claimJob(cfg: WorkerConfig): Promise<ClaimedJob | null> {
+  const data = await post(`${cfg.apiBase}/worker/claim`, { workerId: cfg.workerId }, cfg);
+  const result = unwrap(data);
+  if (!result || !result.jobId) return null;
+  return result as ClaimedJob;
 }
 
-export function updateStage(cfg: WorkerConfig, jobId: string, stage: string, progress: number, counts?: Record<string, number>) {
-  return post(`${cfg.apiBase}/worker/stage`, { jobId, stage, progress, ...(counts ? { counts } : {}) }, cfg);
+export function updateStage(
+  cfg: WorkerConfig,
+  jobId: string,
+  token: string,
+  stage: string,
+  progress: number,
+  counts?: Record<string, number>
+) {
+  return post(`${cfg.apiBase}/worker/stage`, { jobId, workerToken: token, stage, progress, ...(counts ? { counts } : {}) }, cfg);
 }
 
-export function failJob(cfg: WorkerConfig, jobId: string, errorCode: string, errorMsg: string) {
-  return post(`${cfg.apiBase}/worker/fail`, { jobId, errorCode, errorMsg }, cfg);
+export function failJob(cfg: WorkerConfig, jobId: string, token: string, errorCode: string, errorMsg: string) {
+  return post(`${cfg.apiBase}/worker/fail`, { jobId, workerToken: token, errorCode, errorMsg }, cfg);
 }
 
-export function insertListings(cfg: WorkerConfig, jobId: string, listings: unknown[]) {
-  return post(`${cfg.apiBase}/worker/listings`, { jobId, listings }, cfg);
+export function insertListings(cfg: WorkerConfig, jobId: string, token: string, listings: unknown[]) {
+  return post(`${cfg.apiBase}/worker/listings`, { jobId, workerToken: token, listings }, cfg);
 }
 
-export function insertScores(cfg: WorkerConfig, jobId: string, scores: unknown[]) {
-  return post(`${cfg.apiBase}/worker/scores`, { jobId, scores }, cfg);
+export function insertScores(cfg: WorkerConfig, jobId: string, token: string, scores: unknown[]) {
+  return post(`${cfg.apiBase}/worker/scores`, { jobId, workerToken: token, scores }, cfg);
 }
 
-export function insertVisionResults(cfg: WorkerConfig, jobId: string, results: unknown[]) {
-  return post(`${cfg.apiBase}/worker/vision`, { jobId, results }, cfg);
+export function insertVisionResults(cfg: WorkerConfig, jobId: string, token: string, results: unknown[]) {
+  return post(`${cfg.apiBase}/worker/vision`, { jobId, workerToken: token, results }, cfg);
 }
 
-export function insertConsensus(cfg: WorkerConfig, jobId: string, rows: unknown[]) {
-  return post(`${cfg.apiBase}/worker/consensus`, { jobId, rows }, cfg);
+export function insertConsensus(cfg: WorkerConfig, jobId: string, token: string, rows: unknown[]) {
+  return post(`${cfg.apiBase}/worker/consensus`, { jobId, workerToken: token, rows }, cfg);
 }
 
-/** Store the report HTML and register the report. */
-export async function submitReport(cfg: WorkerConfig, jobId: string, html: string, reportVersion: string, listingCount: number) {
-  const up = await post(`${cfg.apiBase}/worker/report_upload`, html, cfg);
-  await post(`${cfg.apiBase}/worker/report`, { jobId, htmlStorageId: up.storageId, reportVersion, listingCount }, cfg);
+/** Store the report HTML as raw text (not JSON-encoded) and register the report. */
+export async function submitReport(
+  cfg: WorkerConfig,
+  jobId: string,
+  token: string,
+  html: string,
+  reportVersion: string,
+  listingCount: number
+) {
+  const upRes = await fetch(`${cfg.apiBase}/worker/report_upload`, {
+    method: "POST",
+    headers: authHeaders(cfg, "text/html; charset=utf-8"),
+    body: html,
+  });
+  const up = await parseJsonResponse(`${cfg.apiBase}/worker/report_upload`, upRes);
+  const storageId = up.storageId ?? unwrap(up)?.storageId;
+  if (!storageId) throw new Error("report_upload did not return a storageId");
+  await post(
+    `${cfg.apiBase}/worker/report`,
+    { jobId, workerToken: token, htmlStorageId: storageId, reportVersion, listingCount },
+    cfg
+  );
+}
+
+export async function getJobSnapshot(cfg: WorkerConfig, jobId: string, token: string): Promise<JobSnapshot> {
+  const data = await post(`${cfg.apiBase}/worker/snapshot`, { jobId, workerToken: token }, cfg);
+  const result = unwrap(data) ?? {};
+  return {
+    listings: result.listings ?? [],
+    scores: result.scores ?? [],
+    visionPrimary: result.visionPrimary ?? [],
+    visionReverify: result.visionReverify ?? [],
+    consensus: result.consensus ?? [],
+    hasReport: Boolean(result.hasReport),
+  };
 }
 
 /** Public read for tests / verification (no auth required for owned views). */

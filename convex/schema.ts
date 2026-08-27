@@ -53,6 +53,8 @@ export default defineSchema({
     workerToken: v.optional(v.string()),
     errorCode: v.optional(v.string()),
     errorMsg: v.optional(v.string()),
+    requestId: v.optional(v.string()),
+    lastCompletedStage: v.optional(v.string()),
     createdAt: v.number(),
     claimedAt: v.optional(v.number()),
     finishedAt: v.optional(v.number()),
@@ -118,6 +120,9 @@ export default defineSchema({
     redFlags: v.array(v.string()),
     details: v.optional(v.string()),
     noEvaluableReason: v.optional(v.string()),
+    rawResponse: v.optional(v.string()),
+    fallbackReason: v.optional(v.string()),
+    costEur: v.optional(v.number()),
     latencyMs: v.optional(v.number()),
     inputTokens: v.optional(v.number()),
     outputTokens: v.optional(v.number()),
@@ -170,9 +175,18 @@ export default defineSchema({
     reportId: v.id("reports"),
     recipientHash: v.string(),
     providerId: v.string(),
-    status: v.union(v.literal("pending"), v.literal("sent"), v.literal("bounced")),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("sent"),
+      v.literal("bounced"),
+      v.literal("failed")
+    ),
+    requestId: v.optional(v.string()),
+    outboundId: v.optional(v.string()),
+    errorMsg: v.optional(v.string()),
     sentAt: v.optional(v.number()),
     createdAt: v.number(),
   })
-    .index("by_report", ["reportId"]),
+    .index("by_report", ["reportId"])
+    .index("by_report_hash", ["reportId", "recipientHash"]),
 });

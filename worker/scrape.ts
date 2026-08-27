@@ -1,12 +1,9 @@
 /**
  * Scraping stage (plan §4 stage 1).
  *
- * Production scraping of coches.net is intentionally OUT of this build (ToS,
- * and the reference workflow was a one-off manual session). The stage is
- * served from fixtures mirroring the real 2026-08-26 session (20 Toyota
- * Yaris ≤ 5.000 €, Zaragoza/Barcelona). The adapter interface is kept so a
- * real scraper (Firecrawl or Playwright-based `__INITIAL_PROPS__` extraction)
- * can be plugged in behind the same `ScrapeSource` contract.
+ * Fixtures remain the default because production scraping of coches.net has
+ * ToS and rate-limit implications. A real Firecrawl-backed source is available
+ * as an explicit opt-in with USE_FIRECRAWL=1 and FIRECRAWL_API_KEY.
  */
 
 import { readFileSync } from "node:fs";
@@ -66,8 +63,76 @@ export class FixtureSource implements ScrapeSource {
   }
 }
 
+/**
+ * Firecrawl search adapter. Firecrawl returns search results with markdown;
+ * the parser extracts only fields that are actually present and leaves
+ * incomplete rows for the normalizer to reject. No fixture data is mixed in.
+ */
+export class FirecrawlSource implements ScrapeSource {
+  name = "firecrawl";
+  constructor(private apiKey: string, private endpoint = "https://api.firecrawl.dev/v1") {}
+
+  async scrape(criteria: ScrapeCriteria): Promise<RawListing[]> {
+    const query = `${criteria.make} ${criteria.model} coches.net ${criteria.region}`;
+    const response = await fetch(`${this.endpoint.replace(/\/$/, "")}/search`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ query, limit: 20, scrapeOptions: { formats: ["markdown"] } }),
+    });
+    const payload: any = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(`FIRECRAWL_HTTP_${response.status}: ${payload?.error ?? "search failed"}`);
+    const rows = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.results) ? payload.results : [];
+    const fetchedAt = Date.now();
+    return rows
+      .map((row: any, index: number) => {
+        const url = String(row?.url ?? row?.link ?? "");
+        const text = `${row?.title ?? ""}\n${row?.description ?? ""}\n${row?.markdown ?? ""}`;
+        if (!url || !text) return null;
+        const price = firstNumber(text, /(\d[\d.\s]*)\s*(?:€|eur|euros?)/i);
+        const km = firstNumber(text, /(\d[\d.\s]*)\s*(?:km|kms|kil[oó]metros?)/i);
+        const year = firstNumber(text, /\b(20\d{2}|19\d{2})\b/);
+        const photoUrls = [...text.matchAll(/!\[[^\]]*\]\((https?:\/\/[^\s)]+)\)/g)].map((m) => m[1]);
+        return {
+          source: "firecrawl",
+          adId: adIdFromUrl(url, index),
+          sourceUrl: url,
+          title: String(row?.title ?? `${criteria.make} ${criteria.model}`),
+          price,
+          km,
+          year: year || null,
+          city: criteria.region,
+          hasWarranty: /garant[ií]a|warranty/i.test(text),
+          isPro: /profesional|concesionario|dealer/i.test(text),
+          photoCount: photoUrls.length,
+          photoUrls,
+          dataQualityFlag: "ok" as const,
+          fetchedAt,
+        } satisfies RawListing;
+      })
+      .filter((row: RawListing | null): row is RawListing => row !== null);
+  }
+}
+
+function firstNumber(text: string, pattern: RegExp): number {
+  const match = text.match(pattern);
+  if (!match) return 0;
+  const normalized = match[1].replace(/[.\s]/g, "");
+  const value = Number(normalized);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function adIdFromUrl(url: string, fallback: number): string {
+  const match = url.match(/-(\d{6,})(?:-[^/]+)?\.(?:aspx|html?)?$/i) ?? url.match(/(\d{6,})/);
+  return match?.[1] ?? `firecrawl-${fallback + 1}`;
+}
+
 export function defaultSource(): ScrapeSource {
   const here = dirname(fileURLToPath(import.meta.url));
+  if (process.env.USE_FIRECRAWL === "1") {
+    const apiKey = process.env.FIRECRAWL_API_KEY;
+    if (!apiKey) throw new Error("FIRECRAWL_NOT_CONFIGURED: set FIRECRAWL_API_KEY");
+    return new FirecrawlSource(apiKey, process.env.FIRECRAWL_BASE_URL ?? "https://api.firecrawl.dev/v1");
+  }
   return new FixtureSource(join(here, "fixtures", "coches_net_yaris_5000.json"));
 }
 
@@ -91,12 +156,14 @@ export function normalize(raw: RawListing[]): {
     let flag: RawListing["dataQualityFlag"] = "ok";
     let dupOf: string | undefined;
 
-    if (l.km < 500 || l.price < 100 || (l.price > 0 && l.km > 0 && l.price / (l.km / 1000) < 0.2)) {
-      // Implausible €/km (the 370€/568km lesson).
+    if (isCorruptListing(l)) {
+      // Used-car listings with implausible mileage/price (lesson: 370 € / 568 km).
       flag = "corrupt";
       excluded++;
     } else {
-      const sig = `${l.km}|${l.price}|${l.photoUrls.slice(0, 2).join(",")}`;
+      // Dedup by km+price+year+city. Photo URLs are NOT required — the
+      // 71108396/71108671 pair shares km+price but has different CDN photos.
+      const sig = `${l.km}|${l.price}|${l.year ?? ""}|${(l.city ?? "").toLowerCase()}`;
       const first = seen.get(sig);
       if (first) {
         flag = "duplicate";
@@ -115,4 +182,12 @@ export function normalize(raw: RawListing[]): {
   }
 
   return { listings: out, valid: out.length - excluded, excluded };
+}
+
+/** Cheap used-car listings with <1000 km or <100 € are treated as corrupt. */
+export function isCorruptListing(l: Pick<RawListing, "km" | "price">): boolean {
+  if (l.price < 100) return true;
+  if (l.km < 1000) return true;
+  if (l.price > 0 && l.km > 0 && l.price / (l.km / 1000) < 0.2) return true;
+  return false;
 }

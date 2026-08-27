@@ -10,9 +10,12 @@
 
 import type * as api_ from "../api.js";
 import type * as crons from "../crons.js";
+import type * as email from "../email.js";
+import type * as email_lib from "../email_lib.js";
+import type * as email_send from "../email_send.js";
+import type * as http from "../http.js";
 import type * as maintenance from "../maintenance.js";
 import type * as worker from "../worker.js";
-import type * as worker_api from "../worker_api.js";
 
 import type {
   ApiFromModules,
@@ -23,9 +26,12 @@ import type {
 declare const fullApi: ApiFromModules<{
   api: typeof api_;
   crons: typeof crons;
+  email: typeof email;
+  email_lib: typeof email_lib;
+  email_send: typeof email_send;
+  http: typeof http;
   maintenance: typeof maintenance;
   worker: typeof worker;
-  worker_api: typeof worker_api;
 }>;
 
 /**
@@ -56,4 +62,5 @@ export declare const internal: FilterApi<
 
 export declare const components: {
   staticHosting: import("@convex-dev/static-hosting/_generated/component.js").ComponentApi<"staticHosting">;
+  agentmail: import("@agentmail/convex/_generated/component.js").ComponentApi<"agentmail">;
 };

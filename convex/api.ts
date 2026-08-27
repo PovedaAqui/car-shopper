@@ -8,7 +8,7 @@ import { internal } from "./_generated/api";
  * The frontend never authenticates with a token in this MVP: ownership is by
  * the opaque `userId` (anonymous, client-generated UUID in localStorage).
  * The local worker writes results exclusively through the authenticated HTTP
- * API (convex/worker_api.ts).
+ * API (convex/http.ts).
  */
 
 /**
@@ -33,12 +33,11 @@ export const create = mutation({
     }
     const now = Date.now();
     const dayStart = new Date(now).setUTCHours(0, 0, 0, 0);
+    const requestId = `${now.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
-    const users = await ctx.db.query("users").collect();
-    const isNewUser = !users.some((u) => u.userId === args.userId);
-    if (isNewUser) {
+    const existingUser = await ctx.db.query("users").withIndex("by_userId", (q) => q.eq("userId", args.userId)).unique();
+    if (!existingUser) {
       await ctx.db.insert("users", { userId: args.userId, createdAt: now });
-      // Seed a free-tier credit for today.
       await ctx.db.insert("credits", {
         userId: args.userId,
         kind: "free_daily",
@@ -47,27 +46,18 @@ export const create = mutation({
       });
     }
 
-    // Free-tier check: free_daily credits created today minus consumed.
-    const credits = (await ctx.db.query("credits").collect()).filter(
-      (c) => c.userId === args.userId && c.kind === "free_daily" && c.createdAt >= dayStart
-    );
+    const credits = (await ctx.db.query("credits").withIndex("by_user_kind", (q) => q.eq("userId", args.userId).eq("kind", "free_daily")).collect())
+      .filter((c) => c.createdAt >= dayStart);
     const available = credits.filter((c) => c.consumedByJobId === undefined).length;
     if (available < 1) {
       throw new Error("FREE_TIER_EXHAUSTED: one free search per day. Try again tomorrow.");
     }
 
-    // Idempotency: same user + criteria on the same day returns the existing job.
     const idempotencyKey = `${args.userId}:${hashCriteria(args.criteria)}`;
-    const allJobs = await ctx.db.query("jobs").collect();
-    const existing = allJobs.filter(
-      (j) =>
-        j.userId === args.userId &&
-        j.idempotencyKey === idempotencyKey &&
-        j.createdAt >= dayStart &&
-        !["failed", "cancelled", "expired"].includes(j.status)
-    );
+    const existing = (await ctx.db.query("jobs").withIndex("by_user", (q) => q.eq("userId", args.userId)).collect())
+      .filter((j) => j.idempotencyKey === idempotencyKey && j.createdAt >= dayStart && !["failed", "cancelled", "expired"].includes(j.status));
     if (existing.length > 0) {
-      return existing[0]._id;
+      return { jobId: existing[0]._id, requestId: existing[0].requestId ?? requestId, status: existing[0].status };
     }
 
     const jobId = await ctx.db.insert("jobs", {
@@ -85,9 +75,9 @@ export const create = mutation({
         visionNoEvaluable: 0,
       },
       createdAt: now,
+      requestId,
     });
 
-    // Consume the oldest free credit (idempotent: exactly one per job).
     const credit = credits
       .filter((c) => c.consumedByJobId === undefined)
       .sort((a, b) => a.createdAt - b.createdAt)[0];
@@ -95,7 +85,7 @@ export const create = mutation({
       await ctx.db.patch("credits", credit._id, { consumedByJobId: jobId });
     }
 
-    return jobId;
+    return { jobId, requestId, status: "queued" as const };
   },
 });
 
@@ -161,7 +151,10 @@ export const watchScores = query({
     const scores = await ctx.db.query("scores").withIndex("by_job", (q) => q.eq("jobId", jobId)).collect();
     const listings = await ctx.db.query("listings").withIndex("by_job", (q) => q.eq("jobId", jobId)).collect();
     const byAd = new Map(listings.map((l) => [l.adId, l]));
-    return scores
+    const finalScores = scores.some((s) => s.scorerVersion.endsWith("-v2"))
+      ? scores.filter((s) => s.scorerVersion.endsWith("-v2"))
+      : scores.filter((s) => s.scorerVersion.endsWith("-v1"));
+    return finalScores
       .map((s) => {
         const l = byAd.get(s.adId);
         return {
@@ -218,15 +211,15 @@ export const watchVision = query({
 export const byStatus = internalQuery({
   args: { status: v.string() },
   handler: async (ctx, { status }) => {
-    // status is a union literal in the schema, so the index value type is the
-    // union; filter from a scan instead of an index eq.
-    const jobs = await ctx.db.query("jobs").collect();
-    return jobs.filter((j) => j.status === status);
+    return await ctx.db
+      .query("jobs")
+      .withIndex("by_status", (q) => q.eq("status", status as any))
+      .collect();
   },
 });
 
 // ---------------------------------------------------------------------------
-// Internal mutations used by the worker HTTP API (worker_api.ts)
+// Internal mutations used by the worker HTTP API (http.ts)
 // ---------------------------------------------------------------------------
 
 const STAGES = [
@@ -244,31 +237,43 @@ export const claimJob = internalMutation({
   args: { workerId: v.string() },
   handler: async (ctx, { workerId }) => {
     const now = Date.now();
-    // Stale claim: claimed 10 min ago without progress -> requeue.
     const claimed = await ctx.db.query("jobs").withIndex("by_status", (q) => q.eq("status", "claimed")).collect();
     for (const j of claimed) {
       if (j.claimedAt !== undefined && now - j.claimedAt > 10 * 60_000) {
-        await ctx.db.patch("jobs", j._id, { status: "queued", stage: "queued", workerToken: undefined });
+        await ctx.db.patch("jobs", j._id, {
+          status: "queued",
+          stage: j.lastCompletedStage ?? j.stage,
+          workerToken: undefined,
+        });
       }
     }
     const queued = await ctx.db.query("jobs").withIndex("by_status", (q) => q.eq("status", "queued")).collect();
     const job = [...queued].sort((a, b) => a.createdAt - b.createdAt)[0];
     if (!job) return null;
     const token = `${workerId}:${now}:${Math.random().toString(36).slice(2)}`;
+    const resumeStage = job.lastCompletedStage && job.lastCompletedStage !== "queued" ? job.stage : "scraping";
     await ctx.db.patch("jobs", job._id, {
       status: "claimed",
-      stage: "scraping",
-      progress: 2,
+      stage: resumeStage,
+      progress: job.progress > 0 ? job.progress : 2,
       workerToken: token,
       claimedAt: now,
     });
-    return { jobId: job._id, token, criteria: job.criteria };
+    return { jobId: job._id, token, criteria: job.criteria, requestId: job.requestId ?? null };
   },
 });
+
+async function requireWorkerToken(ctx: any, jobId: any, workerToken: string) {
+  const job = await ctx.db.get("jobs", jobId);
+  if (!job) throw new Error("job not found");
+  if (!job.workerToken || job.workerToken !== workerToken) throw new Error("WORKER_TOKEN_MISMATCH");
+  return job;
+}
 
 export const updateStage = internalMutation({
   args: {
     jobId: v.id("jobs"),
+    workerToken: v.string(),
     stage: v.union(...STAGES.map((s) => v.literal(s))),
     progress: v.number(),
     counts: v.optional(
@@ -282,8 +287,7 @@ export const updateStage = internalMutation({
     ),
   },
   handler: async (ctx, args) => {
-    const job = await ctx.db.get("jobs", args.jobId);
-    if (!job) throw new Error("job not found");
+    const job = await requireWorkerToken(ctx, args.jobId, args.workerToken);
     const counts = { ...job.counts };
     if (args.counts) {
       for (const k of Object.keys(args.counts) as (keyof typeof counts)[]) {
@@ -296,16 +300,16 @@ export const updateStage = internalMutation({
       status: args.stage === "completed" ? "completed" : args.stage,
       progress: args.progress,
       counts,
+      lastCompletedStage: args.stage,
       finishedAt: args.stage === "completed" ? Date.now() : job.finishedAt,
     });
   },
 });
 
 export const failJob = internalMutation({
-  args: { jobId: v.id("jobs"), errorCode: v.string(), errorMsg: v.string() },
-  handler: async (ctx, { jobId, errorCode, errorMsg }) => {
-    const job = await ctx.db.get("jobs", jobId);
-    if (!job) return;
+  args: { jobId: v.id("jobs"), workerToken: v.string(), errorCode: v.string(), errorMsg: v.string() },
+  handler: async (ctx, { jobId, workerToken, errorCode, errorMsg }) => {
+    const job = await requireWorkerToken(ctx, jobId, workerToken);
     await ctx.db.patch("jobs", job._id, {
       status: "failed",
       errorCode,
@@ -318,6 +322,7 @@ export const failJob = internalMutation({
 export const insertListings = internalMutation({
   args: {
     jobId: v.id("jobs"),
+    workerToken: v.string(),
     listings: v.array(
       v.object({
         source: v.string(),
@@ -339,8 +344,11 @@ export const insertListings = internalMutation({
       })
     ),
   },
-  handler: async (ctx, { jobId, listings }) => {
+  handler: async (ctx, { jobId, workerToken, listings }) => {
+    await requireWorkerToken(ctx, jobId, workerToken);
     for (const l of listings) {
+      const existing = await ctx.db.query("listings").withIndex("by_job_ad", (q) => q.eq("jobId", jobId).eq("adId", l.adId)).first();
+      if (existing) continue;
       await ctx.db.insert("listings", { jobId, ...l });
     }
   },
@@ -349,6 +357,7 @@ export const insertListings = internalMutation({
 export const insertScores = internalMutation({
   args: {
     jobId: v.id("jobs"),
+    workerToken: v.string(),
     scores: v.array(
       v.object({
         adId: v.string(),
@@ -364,8 +373,12 @@ export const insertScores = internalMutation({
       })
     ),
   },
-  handler: async (ctx, { jobId, scores }) => {
+  handler: async (ctx, { jobId, workerToken, scores }) => {
+    await requireWorkerToken(ctx, jobId, workerToken);
+    const existing = await ctx.db.query("scores").withIndex("by_job", (q) => q.eq("jobId", jobId)).collect();
+    const seen = new Set(existing.map((s) => `${s.adId}:${s.scorerVersion}`));
     for (const s of scores) {
+      if (seen.has(`${s.adId}:${s.scorerVersion}`)) continue;
       await ctx.db.insert("scores", { jobId, ...s });
     }
   },
@@ -374,6 +387,7 @@ export const insertScores = internalMutation({
 export const insertVisionResults = internalMutation({
   args: {
     jobId: v.id("jobs"),
+    workerToken: v.string(),
     results: v.array(
       v.object({
         adId: v.string(),
@@ -392,14 +406,21 @@ export const insertVisionResults = internalMutation({
         redFlags: v.array(v.string()),
         details: v.optional(v.string()),
         noEvaluableReason: v.optional(v.string()),
+        rawResponse: v.optional(v.string()),
+        fallbackReason: v.optional(v.string()),
+        costEur: v.optional(v.number()),
         latencyMs: v.optional(v.number()),
         inputTokens: v.optional(v.number()),
         outputTokens: v.optional(v.number()),
       })
     ),
   },
-  handler: async (ctx, { jobId, results }) => {
+  handler: async (ctx, { jobId, workerToken, results }) => {
+    await requireWorkerToken(ctx, jobId, workerToken);
+    const existing = await ctx.db.query("visionResults").withIndex("by_job", (q) => q.eq("jobId", jobId)).collect();
+    const seen = new Set(existing.map((r) => `${r.adId}:${r.step}`));
     for (const r of results) {
+      if (seen.has(`${r.adId}:${r.step}`)) continue;
       await ctx.db.insert("visionResults", { jobId, ...r });
     }
   },
@@ -408,6 +429,7 @@ export const insertVisionResults = internalMutation({
 export const insertConsensus = internalMutation({
   args: {
     jobId: v.id("jobs"),
+    workerToken: v.string(),
     rows: v.array(
       v.object({
         adId: v.string(),
@@ -420,8 +442,12 @@ export const insertConsensus = internalMutation({
       })
     ),
   },
-  handler: async (ctx, { jobId, rows }) => {
+  handler: async (ctx, { jobId, workerToken, rows }) => {
+    await requireWorkerToken(ctx, jobId, workerToken);
+    const existing = await ctx.db.query("consensus").withIndex("by_job", (q) => q.eq("jobId", jobId)).collect();
+    const seen = new Set(existing.map((r) => r.adId));
     for (const r of rows) {
+      if (seen.has(r.adId)) continue;
       await ctx.db.insert("consensus", { jobId, ...r });
     }
   },
@@ -430,18 +456,44 @@ export const insertConsensus = internalMutation({
 export const createReport = internalMutation({
   args: {
     jobId: v.id("jobs"),
+    workerToken: v.string(),
     htmlStorageId: v.id("_storage"),
     reportVersion: v.string(),
     listingCount: v.number(),
   },
-  handler: async (ctx, { jobId, htmlStorageId, reportVersion, listingCount }) => {
-    await ctx.db.insert("reports", {
+  handler: async (ctx, { jobId, workerToken, htmlStorageId, reportVersion, listingCount }) => {
+    await requireWorkerToken(ctx, jobId, workerToken);
+    const existing = await ctx.db.query("reports").withIndex("by_job", (q) => q.eq("jobId", jobId)).first();
+    if (existing) return existing._id;
+    return await ctx.db.insert("reports", {
       jobId,
       htmlStorageId,
       reportVersion,
       listingCount,
       createdAt: Date.now(),
     });
+  },
+});
+
+export const getJobSnapshot = internalQuery({
+  args: { jobId: v.id("jobs"), workerToken: v.string() },
+  handler: async (ctx, { jobId, workerToken }) => {
+    const job = await ctx.db.get("jobs", jobId);
+    if (!job) throw new Error("job not found");
+    if (!job.workerToken || job.workerToken !== workerToken) throw new Error("WORKER_TOKEN_MISMATCH");
+    const listings = await ctx.db.query("listings").withIndex("by_job", (q) => q.eq("jobId", jobId)).collect();
+    const scores = await ctx.db.query("scores").withIndex("by_job", (q) => q.eq("jobId", jobId)).collect();
+    const vision = await ctx.db.query("visionResults").withIndex("by_job", (q) => q.eq("jobId", jobId)).collect();
+    const consensus = await ctx.db.query("consensus").withIndex("by_job", (q) => q.eq("jobId", jobId)).collect();
+    const report = await ctx.db.query("reports").withIndex("by_job", (q) => q.eq("jobId", jobId)).first();
+    return {
+      listings,
+      scores: scores.map((s) => ({ adId: s.adId, scorerVersion: s.scorerVersion })),
+      visionPrimary: vision.filter((v) => v.step === "primary"),
+      visionReverify: vision.filter((v) => v.step === "reverify"),
+      consensus,
+      hasReport: report !== null,
+    };
   },
 });
 

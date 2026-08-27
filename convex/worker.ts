@@ -9,8 +9,7 @@ export const rescueStaleJob = internalMutation({
     if (!job || job.status !== "claimed") return;
     await ctx.db.patch("jobs", job._id, {
       status: "queued",
-      stage: "queued",
-      progress: 0,
+      stage: job.lastCompletedStage ?? job.stage,
       workerToken: undefined,
     });
     void now;

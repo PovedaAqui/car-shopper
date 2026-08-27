@@ -7,10 +7,10 @@
  * `onerror` placeholder fallback (plan §13 risk: expiring CDN URLs).
  */
 
-import { RawListing } from "./scrape.js";
-import { ScoreRow } from "./scoring.js";
-import { VisionResult } from "./vision.js";
-import { ConsensusRow } from "./consensus.js";
+import type { RawListing } from "./scrape.ts";
+import type { ScoreRow } from "./scoring.ts";
+import type { VisionResult } from "./vision.ts";
+import type { ConsensusRow } from "./consensus.ts";
 
 export interface ReportInput {
   criteria: { make: string; model: string; maxPrice: number; region: string; maxKm?: number };
@@ -76,7 +76,7 @@ export function renderReportHTML(input: ReportInput): string {
       const redFlags = v && v.redFlags.length > 0 ? `<div class="flags">${v.redFlags.map((f) => `· ${esc(f)}`).join("<br>")}</div>` : "";
       return `<tr>
         <td class="rank">${s.rank}</td>
-        ${photoHtml}
+        <td>${photoHtml}</td>
         <td class="title">${esc(l.title)}<div class="sub">${esc(l.city ?? "—")} · ${l.year ?? "año n/d"} · ${esc(l.fuel ?? "—")}</div></td>
         <td class="num">€ ${s.pricePerKm.toFixed(2)}/km</td>
         <td class="num">${esc(l.price).replace(".", ",")} €</td>

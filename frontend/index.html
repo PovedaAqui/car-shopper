@@ -1,41 +1,46 @@
 <!doctype html>
-<html lang="es">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex">
-  <meta name="description" content="Car Shopper — ranking calidad/precio de coches de segunda mano con inspección visual por IA local, en tiempo real.">
-  <title>Car Shopper — ranking de coches por €/km en tiempo real</title>
+  <meta name="description" content="Car Shopper — real-time used-car value ranking with local AI visual inspection.">
+  <title>Car Shopper — real-time used-car ranking</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+  <a class="skip-link" href="#main-content">Skip to content</a>
   <div class="wrap">
     <header>
+      <div class="header-row">
+        <p class="eyebrow">Shop with confidence</p>
+        <button class="settings-btn" id="settings-open" type="button" aria-haspopup="dialog" aria-controls="settings-dialog">Settings</button>
+      </div>
       <h1>Car Shopper</h1>
-      <p class="tag">Ranking calidad/precio + inspección visual por IA local · en tiempo real (Convex)</p>
+      <p class="tag">Value ranking plus local-AI visual inspection, updated in real time with Convex.</p>
     </header>
 
-    <main>
+    <main id="main-content">
       <!-- Search form -->
       <section class="card" id="search-card" aria-labelledby="search-h">
-        <h2 id="search-h">Busca tu coche</h2>
+        <h2 id="search-h">Find your next car</h2>
         <form id="search-form">
           <div class="grid">
-            <label>Marca <input name="make" required value="Toyota" maxlength="40"></label>
-            <label>Modelo <input name="model" required value="Yaris" maxlength="40"></label>
-            <label>Precio máximo (€) <input name="maxPrice" type="number" required min="100" max="1000000" value="5000"></label>
-            <label>Región <input name="region" required value="Barcelona / Zaragoza" maxlength="60"></label>
-            <label>Km máximo (opcional) <input name="maxKm" type="number" min="0" placeholder="cualquiera"></label>
+            <label>Make <input name="make" required value="Toyota" maxlength="40"></label>
+            <label>Model <input name="model" required value="Yaris" maxlength="40"></label>
+            <label>Maximum price (€) <input name="maxPrice" type="number" required min="100" max="1000000" value="5000"></label>
+            <label>Region <input name="region" required value="Barcelona / Zaragoza" maxlength="60"></label>
+            <label>Maximum kilometres (optional) <input name="maxKm" type="number" min="0" placeholder="any distance"></label>
           </div>
-          <button type="submit" id="search-btn">Generar ranking</button>
-          <p class="hint">Free tier: 1 búsqueda/día. El worker local procesa el job y el estado se actualiza en vivo.</p>
+          <button type="submit" id="search-btn">Build my ranking</button>
+          <p class="hint">Free tier: 1 search per day. The local worker processes your job and Convex streams status updates live.</p>
           <div id="form-error" class="error" role="alert" hidden></div>
         </form>
       </section>
 
       <!-- Job dashboard -->
       <section class="card" id="dashboard" hidden aria-labelledby="dash-h">
-        <h2 id="dash-h">Estado del job</h2>
+        <h2 id="dash-h">Search status</h2>
         <div id="job-meta" class="meta"></div>
         <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progress">
           <div class="bar" id="progress-bar"></div>
@@ -45,20 +50,65 @@
         <div id="scores"></div>
         <div id="vision"></div>
         <div id="report-holder" hidden>
-          <h3>Informe</h3>
-          <a id="report-link" href="#" target="_blank" rel="noopener">Abrir informe completo</a>
+          <h3>Report</h3>
+          <a id="report-link" href="#" target="_blank" rel="noopener">Open full report</a>
+          <form id="email-form" class="email-form">
+            <label>Email report (HTML in the message body, not an attachment)
+              <input name="email" type="email" required maxlength="254" autocomplete="email" placeholder="you@example.com">
+            </label>
+            <label class="check">
+              <input name="confirm" type="checkbox" required>
+              I confirm sending to this address
+            </label>
+            <button type="submit" id="email-btn">Email report</button>
+            <p class="hint">AgentMail prevents a retry from sending the same report to the same address twice.</p>
+            <div id="email-status" class="stage" aria-live="polite"></div>
+          </form>
         </div>
       </section>
 
       <!-- History -->
       <section class="card" id="history" hidden aria-labelledby="hist-h">
-        <h2 id="hist-h">Tus búsquedas</h2>
+        <h2 id="hist-h">Your searches</h2>
         <ul id="job-list" class="joblist"></ul>
       </section>
     </main>
 
+    <dialog id="settings-dialog" aria-labelledby="settings-title">
+      <form method="dialog" class="settings-card" id="settings-form">
+        <div class="settings-heading">
+          <div><p class="eyebrow">Local configuration</p><h2 id="settings-title">AI settings</h2></div>
+          <button class="icon-btn" id="settings-close" type="submit" aria-label="Close settings">×</button>
+        </div>
+        <p class="settings-note">These values stay in this browser session. They are never sent to Convex or stored in the app database. The separate local worker still needs matching environment variables.</p>
+        <div class="settings-grid">
+          <label>Vision provider
+            <select name="visionProvider"><option value="vllm">Local vLLM</option><option value="openrouter">OpenRouter</option></select>
+          </label>
+          <label>Vision endpoint
+            <input name="visionBaseUrl" type="url" value="http://localhost:8000/v1" placeholder="https://openrouter.ai/api/v1">
+          </label>
+          <label>Vision model
+            <input name="visionModel" maxlength="160" value="qwen38-27b-unsloth-nvfp4-dflash2" placeholder="qwen/qwen2.5-vl-72b-instruct">
+          </label>
+          <label>OpenRouter API key
+            <input name="openrouterKey" type="password" autocomplete="off" placeholder="sk-or-…">
+          </label>
+          <label>Firecrawl API key
+            <input name="firecrawlKey" type="password" autocomplete="off" placeholder="fc-…">
+          </label>
+          <label class="settings-check"><input name="useFirecrawl" type="checkbox"> Use Firecrawl scraper</label>
+        </div>
+        <div class="settings-actions">
+          <button type="button" class="secondary-btn" id="settings-clear">Clear local settings</button>
+          <button type="submit" id="settings-save">Save settings</button>
+        </div>
+        <p class="settings-status" id="settings-status" role="status" aria-live="polite"></p>
+      </form>
+    </dialog>
+
     <footer class="foot">
-      <p>Datos: fixture de la sesión de referencia 2026-08-26 (coches.net, 20 Toyota Yaris ≤ 5.000 €). La inferencia usa el endpoint local OpenAI-compatible; sin egress a cloud de modelos. Este informe no sustituye una inspección mecánica presencial.</p>
+      <p>Data: fixture from the 2026-08-26 reference session (20 Toyota Yaris listings, up to €5,000). Inference uses a local OpenAI-compatible endpoint with no model-cloud egress. This report does not replace an in-person mechanical inspection.</p>
     </footer>
   </div>
   <script src="/app.js"></script>

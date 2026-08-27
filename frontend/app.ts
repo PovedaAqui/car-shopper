@@ -11,6 +11,8 @@
  */
 
 import { ConvexClient } from "convex/browser";
+import { api } from "../convex/_generated/api.js";
+import type { Id } from "../convex/_generated/dataModel.js";
 
 const DEPLOYMENT_URL: string =
   (globalThis as any).VITE_CONVEX_URL ?? "http://127.0.0.1:3210";
@@ -30,11 +32,65 @@ function getOrCreateUserId(): string {
 }
 
 const userId = getOrCreateUserId();
-// Vanilla (non-React) usage: the client is typed for function references,
-// which the static site cannot import at build time, so we use string paths.
-const client = new ConvexClient(DEPLOYMENT_URL) as any;
+// Vanilla (non-React) usage still uses generated Convex function references.
+// This keeps realtime subscriptions and calls on the same checked API as the
+// backend instead of relying on undocumented string paths.
+const client = new ConvexClient(DEPLOYMENT_URL);
 
-let activeJobId: string | null = null;
+const SETTINGS_KEY = "car-shopper.local-settings";
+
+type LocalSettings = {
+  visionProvider: string;
+  visionBaseUrl: string;
+  visionModel: string;
+  openrouterKey: string;
+  firecrawlKey: string;
+  useFirecrawl: boolean;
+};
+
+function loadSettings(): Partial<LocalSettings> {
+  try {
+    return JSON.parse(sessionStorage.getItem(SETTINGS_KEY) ?? "{}");
+  } catch {
+    return {};
+  }
+}
+
+function setupSettings() {
+  const dialog = $("settings-dialog") as HTMLDialogElement | null;
+  const form = $("settings-form") as HTMLFormElement | null;
+  if (!dialog || !form) return;
+  const saved = loadSettings();
+  for (const [key, value] of Object.entries(saved)) {
+    const field = form.elements.namedItem(key) as HTMLInputElement | HTMLSelectElement | null;
+    if (!field) continue;
+    if (field instanceof HTMLInputElement && field.type === "checkbox") field.checked = Boolean(value);
+    else field.value = String(value ?? "");
+  }
+  $("settings-open").addEventListener("click", () => dialog.showModal());
+  $("settings-clear").addEventListener("click", () => {
+    sessionStorage.removeItem(SETTINGS_KEY);
+    form.reset();
+    $("settings-status").textContent = "Local settings cleared.";
+  });
+  form.addEventListener("submit", (event) => {
+    if ((event as SubmitEvent).submitter?.id === "settings-close") return;
+    event.preventDefault();
+    const data = new FormData(form);
+    const settings: LocalSettings = {
+      visionProvider: String(data.get("visionProvider") ?? "vllm"),
+      visionBaseUrl: String(data.get("visionBaseUrl") ?? ""),
+      visionModel: String(data.get("visionModel") ?? ""),
+      openrouterKey: String(data.get("openrouterKey") ?? ""),
+      firecrawlKey: String(data.get("firecrawlKey") ?? ""),
+      useFirecrawl: data.get("useFirecrawl") === "on",
+    };
+    sessionStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    $("settings-status").textContent = "Saved for this browser session.";
+  });
+}
+
+let activeJobId: Id<"jobs"> | null = null;
 let unsubscribers: Array<() => void> = [];
 let pollTimer: number | null = null;
 
@@ -44,6 +100,17 @@ let pollTimer: number | null = null;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
+setupSettings();
+
+function esc(s: unknown): string {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function el(tag: string, cls: string, text = ""): HTMLElement {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -52,18 +119,25 @@ function el(tag: string, cls: string, text = ""): HTMLElement {
 }
 
 const STAGE_LABELS: Record<string, string> = {
-  queued: "En cola",
-  claimed: "Reservado por el worker",
-  scraping: "Recogiendo anuncios",
-  normalizing: "Normalizando y depurando datos",
-  ranking: "Puntuando (€/km + extras)",
-  vision: "Inspección visual (doble pasada)",
-  consensus: "Cruce de visiones (consenso)",
-  reporting: "Generando informe",
-  completed: "Completado",
-  failed: "Fallido",
-  cancelled: "Cancelado",
-  expired: "Expirado",
+  queued: "Queued",
+  claimed: "Claimed by worker",
+  scraping: "Collecting listings",
+  normalizing: "Validating and cleaning data",
+  ranking: "Scoring (€/km + extras)",
+  vision: "Visual inspection (two passes)",
+  consensus: "Cross-checking visual results",
+  reporting: "Building report",
+  completed: "Completed",
+  failed: "Failed",
+  cancelled: "Cancelled",
+  expired: "Expired",
+};
+
+const VISUAL_STATE_LABELS: Record<string, string> = {
+  bien: "Good",
+  regular: "Fair",
+  mal: "Poor",
+  no_evaluable: "Not evaluable",
 };
 
 // ---------------------------------------------------------------------------
@@ -78,23 +152,28 @@ function subscribeAll() {
   const jobId = activeJobId;
 
   unsubscribers.push(
-    client.onUpdate("api.watchJob", { jobId, userId }, (job: any) => {
+    client.onUpdate(api.api.watchJob, { jobId, userId }, (job: any) => {
       renderJobView(job);
     })
   );
   unsubscribers.push(
-    client.onUpdate("api.watchScores", { jobId, userId }, (scores: any[]) => {
+    client.onUpdate(api.api.watchScores, { jobId, userId }, (scores: any[]) => {
       renderScores(scores);
     })
   );
   unsubscribers.push(
-    client.onUpdate("api.watchVision", { jobId, userId }, (rows: any[]) => {
+    client.onUpdate(api.api.watchVision, { jobId, userId }, (rows: any[]) => {
       renderVision(rows);
     })
   );
   unsubscribers.push(
-    client.onUpdate("api.listJobs", { userId }, (jobs: any[]) => {
+    client.onUpdate(api.api.listJobs, { userId }, (jobs: any[]) => {
       renderHistory(jobs);
+    })
+  );
+  unsubscribers.push(
+    client.onUpdate(api.email.listDeliveries, { jobId, userId }, (rows: any[]) => {
+      renderDeliveries(rows);
     })
   );
 }
@@ -106,7 +185,7 @@ function startPollFallback() {
   pollTimer = window.setInterval(async () => {
     if (!activeJobId) return;
     try {
-      const job = await client.query("api.watchJob", { jobId: activeJobId, userId });
+      const job = await client.query(api.api.watchJob, { jobId: activeJobId, userId });
       renderJobView(job as any);
     } catch {
       /* deployment unreachable; keep trying */
@@ -114,7 +193,7 @@ function startPollFallback() {
   }, 5000);
 }
 
-client.onUpdate("api.listJobs", { userId }, (jobs: any[]) => {
+client.onUpdate(api.api.listJobs, { userId }, (jobs: any[]) => {
   renderHistory(jobs);
   const hasActive = jobs.some((j: any) => ["queued", "claimed", "scraping", "normalizing", "ranking", "vision", "consensus", "reporting"].includes(j.status));
   if (hasActive && !activeJobId) {
@@ -123,10 +202,11 @@ client.onUpdate("api.listJobs", { userId }, (jobs: any[]) => {
   }
 });
 
-function openJob(jobId: string) {
+function openJob(jobId: Id<"jobs">) {
   activeJobId = jobId;
   $("dashboard").hidden = false;
   subscribeAll();
+  startPollFallback();
 }
 
 // ---------------------------------------------------------------------------
@@ -139,7 +219,7 @@ function renderJobView(job: any) {
     return;
   }
   const status = job.status as string;
-  $("job-meta").textContent = `${job.criteria?.make} ${job.criteria?.model} ≤ ${job.criteria?.maxPrice} € · ${job.criteria?.region ?? ""} · ${new Date(job.createdAt).toLocaleString("es-ES")}`;
+  $("job-meta").textContent = `${job.criteria?.make} ${job.criteria?.model} ≤ €${job.criteria?.maxPrice} · ${job.criteria?.region ?? ""} · ${new Date(job.createdAt).toLocaleString("en-GB")}`;
   const pct = Math.round(job.progress ?? 0);
   const bar = $("progress-bar") as HTMLElement;
   const wrap = $("progress") as HTMLElement;
@@ -173,9 +253,9 @@ function renderJobView(job: any) {
   }
 }
 
-async function loadReportLink(jobId: string) {
+async function loadReportLink(jobId: Id<"jobs">) {
   try {
-    const r = await client.query("api.getReport", { jobId, userId });
+    const r = await client.query(api.api.getReport, { jobId, userId });
     if (r?.url) {
       ($("report-link") as HTMLAnchorElement).href = r.url;
     }
@@ -184,25 +264,38 @@ async function loadReportLink(jobId: string) {
   }
 }
 
+function renderDeliveries(rows: any[]) {
+  const box = $("email-status");
+  if (!box || !rows?.length) return;
+  const last = rows[0];
+  const labels: Record<string, string> = {
+    pending: "Email queued",
+    sent: "Sent (HTML in message body)",
+    bounced: "Bounced",
+    failed: last.errorMsg ?? "Email failed",
+  };
+  box.textContent = labels[last.status] ?? last.status;
+}
+
 function renderScores(scores: any[]) {
   const box = $("scores");
   box.innerHTML = "";
   if (!scores.length) return;
   box.appendChild(el("h3", "", "Ranking"));
   const table = el("table", "tbl");
-  table.innerHTML = `<thead><tr><th>#</th><th>Anuncio</th><th>€/km</th><th>Precio</th><th>Km</th><th>Score</th><th></th></tr></thead>`;
+  table.innerHTML = `<thead><tr><th>#</th><th>Listing</th><th>€/km</th><th>Price</th><th>Km</th><th>Score</th><th></th></tr></thead>`;
   const tbody = el("tbody", "");
   for (const s of scores) {
     const tr = el("tr", "");
     const flag =
       s.dataQualityFlag === "ok" ? "" : `<span class="flag">${s.dataQualityFlag === "duplicate" ? "duplicado" : "datos corruptos"}</span>`;
     tr.innerHTML = `
-      <td>${s.rank ?? "–"}</td>
-      <td>${s.title} <span class="sub">${s.city ?? "—"} · ${s.year ?? "n/d"}</span></td>
-      <td class="num">${s.pricePerKm.toFixed(2)}</td>
-      <td class="num">${s.price.toLocaleString("es-ES")} €</td>
-      <td class="num">${(s.km / 1000).toFixed(0)}k</td>
-      <td class="num">${s.final.toFixed(1)}${s.visDelta ? `<span class="delta ${s.visDelta > 0 ? "pos" : "neg"}">(${s.visDelta > 0 ? "+" : ""}${s.visDelta})</span>` : ""}</td>
+      <td>${esc(s.rank ?? "–")}</td>
+      <td>${esc(s.title)} <span class="sub">${esc(s.city ?? "—")} · ${esc(s.year ?? "n/d")}</span></td>
+      <td class="num">${Number(s.pricePerKm).toFixed(2)}</td>
+      <td class="num">€${Number(s.price).toLocaleString("en-GB")}</td>
+      <td class="num">${(Number(s.km) / 1000).toFixed(0)}k</td>
+      <td class="num">${Number(s.final).toFixed(1)}${s.visDelta ? `<span class="delta ${s.visDelta > 0 ? "pos" : "neg"}">(${s.visDelta > 0 ? "+" : ""}${esc(s.visDelta)})</span>` : ""}</td>
       <td>${flag}</td>`;
     tbody.appendChild(tr);
   }
@@ -215,26 +308,26 @@ function renderVision(rows: any[]) {
   box.innerHTML = "";
   const evaluated = rows.filter((r) => r.badge === "consenso" || r.badge === "discrepancia");
   if (!evaluated.length) return;
-  box.appendChild(el("h3", "", "Inspección visual (doble pasada)"));
+  box.appendChild(el("h3", "", "Visual inspection (two passes)"));
   const table = el("table", "tbl");
-  table.innerHTML = `<thead><tr><th>Anuncio</th><th>Exterior</th><th>Color</th><th>Fotos</th><th>Consenso</th><th>Alertas</th></tr></thead>`;
+  table.innerHTML = `<thead><tr><th>Listing</th><th>Exterior</th><th>Colour</th><th>Photos</th><th>Consensus</th><th>Alerts</th></tr></thead>`;
   const tbody = el("tbody", "");
   // Show the primary (step=primary) rows only; consensus badge is attached.
   for (const r of rows.filter((x) => x.step === "primary")) {
     const tr = el("tr", "");
     const badge =
       r.badge === "discrepancia"
-        ? `<span class="badge bad">⚠ discrepancia</span>`
+        ? `<span class="badge bad">⚠ discrepancy</span>`
         : r.badge === "consenso"
-          ? `<span class="badge good">consenso</span>`
-          : `<span class="badge muted">no evaluable</span>`;
+          ? `<span class="badge good">consensus</span>`
+          : `<span class="badge muted">not evaluable</span>`;
     tr.innerHTML = `
-      <td>${r.adId}</td>
-      <td class="badge ${r.exteriorState === "bien" ? "good" : r.exteriorState === "no_evaluable" ? "muted" : "warn"}">${r.exteriorState}</td>
-      <td>${r.color ?? "—"}</td>
-      <td>${r.photosAnalyzed}</td>
+      <td>${esc(r.adId)}</td>
+      <td class="badge ${r.exteriorState === "bien" ? "good" : r.exteriorState === "no_evaluable" ? "muted" : "warn"}">${esc(VISUAL_STATE_LABELS[r.exteriorState] ?? r.exteriorState)}</td>
+      <td>${esc(r.color ?? "—")}</td>
+      <td>${esc(r.photosAnalyzed)}</td>
       <td>${badge}</td>
-      <td class="flags">${r.redFlags.length ? r.redFlags.join(" · ") : "—"}</td>`;
+      <td class="flags">${r.redFlags.length ? r.redFlags.map(esc).join(" · ") : "—"}</td>`;
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
@@ -251,13 +344,13 @@ function renderHistory(jobs: any[]) {
     const statusCls =
       j.status === "completed" ? "good" : j.status === "failed" ? "bad" : "live";
     li.innerHTML = `
-      <button data-job="${j.jobId}" class="jobbtn">${j.criteria?.make} ${j.criteria?.model} ≤ ${j.criteria?.maxPrice} €</button>
-      <span class="badge ${statusCls}">${STAGE_LABELS[j.status] ?? j.status}</span>
-      <span class="sub">${new Date(j.createdAt).toLocaleDateString("es-ES")}</span>`;
+      <button data-job="${esc(j.jobId)}" class="jobbtn">${esc(j.criteria?.make)} ${esc(j.criteria?.model)} ≤ ${esc(j.criteria?.maxPrice)} €</button>
+      <span class="badge ${statusCls}">${esc(STAGE_LABELS[j.status] ?? j.status)}</span>
+      <span class="sub">${esc(new Date(j.createdAt).toLocaleDateString("en-GB"))}</span>`;
     list.appendChild(li);
   }
   list.querySelectorAll<HTMLButtonElement>("button.jobbtn").forEach((b) => {
-    b.addEventListener("click", () => openJob(b.dataset.job!));
+    b.addEventListener("click", () => openJob(b.dataset.job as Id<"jobs">));
   });
 }
 
@@ -282,12 +375,40 @@ form.addEventListener("submit", async (e) => {
   const btn = $("search-btn") as HTMLButtonElement;
   btn.disabled = true;
   try {
-    const jobId = await client.mutation("api.create", { userId, criteria });
-    openJob(jobId as string);
+    const created = await client.mutation(api.api.create, { userId, criteria });
+    const jobId = typeof created === "string" ? created : created?.jobId;
+    if (!jobId) throw new Error("CREATE_JOB_FAILED: Convex returned no job id");
+    openJob(jobId);
     window.scrollTo({ top: $("dashboard").offsetTop - 16, behavior: "smooth" });
   } catch (e: any) {
     err.hidden = false;
     err.textContent = e?.message ?? String(e);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+const emailForm = $("email-form") as HTMLFormElement | null;
+emailForm?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!activeJobId) return;
+  const status = $("email-status");
+  const data = new FormData(emailForm);
+  const btn = $("email-btn") as HTMLButtonElement;
+  btn.disabled = true;
+  status.textContent = "Enviando…";
+  try {
+    const result = await client.mutation(api.email.requestEmail, {
+      jobId: activeJobId,
+      userId,
+      email: String(data.get("email") ?? ""),
+      confirm: data.get("confirm") === "on",
+    });
+    status.textContent = result?.reused
+      ? "Ya había un envío para esta dirección — no se ha reenviado."
+      : "Envío en cola (AgentMail).";
+  } catch (err: any) {
+    status.textContent = err?.message ?? String(err);
   } finally {
     btn.disabled = false;
   }

@@ -2,19 +2,49 @@
 
 - **Project:** Car Shopper
 - **Event:** Convex All Gas Hackathon
-- **What it does:** Local-AI car shopping comparison app. Scrapes listings, ranks by €/km, runs dual-model vision inspection, produces a ranked HTML report with consensus badges.
+- **What it does:** Local-AI car shopping comparison app. Ranks fixture listings by €/km, runs two independent vision passes, produces a ranked HTML report, and can email that report as an HTML body via AgentMail.
 - **Live app:** not deployed
 - **Repo:** https://github.com/PovedaAqui/car-shopper
 - **Frontend:** Convex static hosting
-- **Convex deployment:** local self-hosted
-- **Components:** @convex-dev/static-hosting
+- **Convex deployment:** not deployed
+- **Components:** @convex-dev/static-hosting, @agentmail/convex
 - **Convex features:** schema, queries, mutations, actions, crons, HTTP actions, realtime subscriptions, File Storage
-- **Auth:** none yet
+- **Auth:** none
 - **AI models:** qwen38-27b-unsloth-nvfp4-dflash2 (local vLLM), Ollama/LM Studio adapters
 - **Started:** 2026-08-26T16:25:21Z
-- **Last updated:** 2026-08-26T17:52:00Z
+- **Last updated:** 2026-08-27T12:16:29Z
 
 ## Log
 
 ### 2026-08-26 - initial
 Set up project structure: Convex backend (schema, queries, mutations, subscriptions, crons, worker HTTP API), local worker (provider abstraction, scoring engine, vision pipeline, consensus, report renderer), frontend scaffold with realtime dashboard. Hackathon skill installed. TypeScript compiles clean (`npx tsc --noEmit`).
+
+### 2026-08-26 - working tree
+Fixed Phase 1 blockers against the product plan: worker TypeScript imports, raw HTML report upload, corrupt/dedup rules, stage-cache resume, worker-token checks, request_id, unit tests, escaped dashboard HTML.
+
+### 2026-08-27 - working tree
+Corrected the Convex HTTP integration: the worker and AgentMail webhook routes now live in the conventionally discovered `convex/http.ts`, with 400-level JSON body validation before Convex argument validation. Added the official static-hosting `deploy` script. Verified Convex AI files, backend generation, tests, and frontend build.
+
+### 2026-08-27 - working tree
+Replaced frontend string-based Convex calls with generated function references from `convex/_generated/api`, preserving typed job IDs. This makes the dashboard's realtime subscriptions and mutations use the supported Convex client contract. Tests, typecheck, build, and Convex generation pass.
+
+### 2026-08-27 - working tree
+Hardened the worker HTTP router to return `400` for malformed JSON before invoking Convex validators. Verified the malformed-request path, backend generation, tests, frontend build, and whitespace checks.
+
+### 2026-08-27 - working tree
+Refined the frontend with a Google/web.dev-inspired accessible visual system: stronger hierarchy and contrast, responsive form and table layout, keyboard skip link, visible focus states, larger touch targets, hover feedback, dark-mode support, and reduced-motion handling. Built and served the site locally at `http://127.0.0.1:4173`.
+
+### 2026-08-27 - working tree
+Set English as the default frontend language and verified the full local flow through Camoufox: the browser submitted a search to Convex, the worker claimed it through `/api/worker/claim`, and the pipeline completed with 18 ranked listings, 2 excluded listings, 15/20 vision-evaluable results, and an HTML report. Local worker configuration now derives the self-hosted site port and ignores stale file-based deployment keys in local dev mode.
+
+### 2026-08-27 - working tree
+Verified model provenance instead of relying on fixture output. The worker queried local vLLM on port 8000; the configured model rejected image input, so the pipeline now reports `usedReferenceVision: false` and 20 honest `no_evaluable` vision results unless `ALLOW_REFERENCE_VISION=1` is explicitly set for a demo. Documented OpenRouter-compatible configuration without storing credentials.
+
+### 2026-08-27 - working tree
+Added an explicit Firecrawl search adapter behind `USE_FIRECRAWL=1` and `FIRECRAWL_API_KEY`. It maps Firecrawl result metadata into the same normalized listing contract, keeps fixtures as the default, and surfaces provider errors instead of mixing or inventing data. Added parser/error tests; the suite passes 21/21. No active Firecrawl key is present in the Hermes environment, so no live Firecrawl request was made.
+
+### 2026-08-27 - working tree
+Added an accessible AI settings dialog to the frontend with provider, endpoint, model, OpenRouter key, Firecrawl key, and scraper toggle fields. Values are stored only in session storage and are never sent to Convex; the worker remains configured through its environment. Verified the dialog through Camoufox and re-ran the build and 21-test suite.
+
+### 2026-08-27 - working tree
+Completed a Camoufox browser pass over settings, search submission, Convex job state, history, report, ranking, visual inspection, and email controls. Fixed the dashboard query to show only final v2 scores instead of duplicating v1 and v2 rows. Rebuilt and verified the app and backend after the fix.

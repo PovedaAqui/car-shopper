@@ -105,6 +105,7 @@ export function defaultModels(): {
       maxTokens: 2048,
       disableThinking: true,
       visionCapable: process.env.MODEL_IS_VISION === "1",
+      apiKey: process.env.OPENROUTER_API_KEY,
     },
     visionFallback: null,
   };

@@ -12,15 +12,16 @@
  *  MODEL_BASE_URL / MODEL_NAME  local OpenAI-compatible endpoint (vLLM)
  *  VISION_MODE                  local_inference_only (default) | local_preferred
  *  MODEL_IS_VISION=1            the served model accepts image inputs
+ *  ALLOW_REFERENCE_VISION=1     demo/test-only deterministic fixture fallback
  *  POLL_MS                      poll interval (default 5000)
  */
 
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadWorkerConfig, WorkerConfig, claimJob, updateStage, failJob, insertListings, insertScores, insertVisionResults, insertConsensus, submitReport, queryJob } from "./convex_client.js";
-import { runPipeline, PipelineResult } from "./pipeline.js";
-import { RawListing, ScrapeCriteria } from "./scrape.js";
+import { loadWorkerConfig, type WorkerConfig, claimJob, updateStage, failJob, insertListings, insertScores, insertVisionResults, insertConsensus, submitReport, getJobSnapshot, queryJob } from "./convex_client.ts";
+import { runPipeline, type PipelineResult } from "./pipeline.ts";
+import type { RawListing, ScrapeCriteria } from "./scrape.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -39,16 +40,20 @@ async function runAgainstConvex(cfg: WorkerConfig): Promise<void> {
         continue;
       }
       const jobId: string = claimed.jobId;
+      const token: string = claimed.token;
       const criteria: ScrapeCriteria = claimed.criteria;
       log(`claimed job ${jobId}: ${criteria.make} ${criteria.model} <= ${criteria.maxPrice} EUR in ${criteria.region}`);
 
+      const snapshot = await getJobSnapshot(cfg, jobId, token).catch(() => null);
+
       const progress = {
         onStage: (stage: string, progressPct: number, counts?: Record<string, number>) =>
-          updateStage(cfg, jobId, stage, progressPct, counts),
+          updateStage(cfg, jobId, token, stage, progressPct, counts),
         onListings: (listings: RawListing[]) =>
           insertListings(
             cfg,
             jobId,
+            token,
             listings.map((l) => ({
               source: l.source,
               adId: l.adId,
@@ -68,28 +73,24 @@ async function runAgainstConvex(cfg: WorkerConfig): Promise<void> {
               fetchedAt: l.fetchedAt,
             }))
           ),
-        onScores: (scores: unknown[]) => insertScores(cfg, jobId, scores as any[]),
-        onVision: (results: unknown[]) => insertVisionResults(cfg, jobId, results as any[]),
-        onConsensus: (rows: unknown[]) => insertConsensus(cfg, jobId, rows as any[]),
-        onReport: (html: string, listingCount: number) => submitReport(cfg, jobId, html, "report-v2", listingCount),
+        onScores: (scores: unknown[]) => insertScores(cfg, jobId, token, scores as any[]),
+        onVision: (results: unknown[]) => insertVisionResults(cfg, jobId, token, results as any[]),
+        onConsensus: (rows: unknown[]) => insertConsensus(cfg, jobId, token, rows as any[]),
+        onReport: (html: string, listingCount: number) => submitReport(cfg, jobId, token, html, "report-v2", listingCount),
         onDone: () => Promise.resolve(),
       };
 
-      const result: PipelineResult = await runPipeline(jobId, criteria, cfg, progress);
-      log(
-        `job ${jobId} COMPLETED: ${result.ranked} ranked, ${result.excluded} excluded, vision ${result.visionEvaluable}/${result.visionEvaluable + result.visionNoEvaluable} evaluable (${result.providerLabel}), report ${result.reportBytes} bytes`
-      );
+      try {
+        const result: PipelineResult = await runPipeline(jobId, criteria, cfg, progress, { snapshot });
+        log(
+          `job ${jobId} COMPLETED: ${result.ranked} ranked, ${result.excluded} excluded, vision ${result.visionEvaluable}/${result.visionEvaluable + result.visionNoEvaluable} evaluable (${result.providerLabel}), report ${result.reportBytes} bytes`
+        );
+      } catch (e: any) {
+        log("job error:", jobId, e?.message ?? e);
+        await failJob(cfg, jobId, token, "WORKER_CRASH", e?.message ?? "worker pipeline error").catch(() => undefined);
+      }
     } catch (e: any) {
       log("worker error:", e?.message ?? e);
-      // If we hold a job, try to mark it failed; otherwise just wait.
-      try {
-        const job = await claimJob(cfg); // no-op claim attempt to surface state
-        if (job?.jobId) {
-          await failJob(cfg, job.jobId, "WORKER_CRASH", "worker loop error; job returned to queue");
-        }
-      } catch {
-        /* ignore */
-      }
       await sleep(pollMs);
     }
   }
