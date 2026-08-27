@@ -12,7 +12,7 @@
 - **Auth:** none
 - **AI models:** qwen38-27b-unsloth-nvfp4-dflash2 (local vLLM), Ollama/LM Studio adapters
 - **Started:** 2026-08-26T16:25:21Z
-- **Last updated:** 2026-08-27T12:16:29Z
+- **Last updated:** 2026-08-27T12:18:53Z
 
 ## Log
 
@@ -48,3 +48,6 @@ Added an accessible AI settings dialog to the frontend with provider, endpoint, 
 
 ### 2026-08-27 - working tree
 Completed a Camoufox browser pass over settings, search submission, Convex job state, history, report, ranking, visual inspection, and email controls. Fixed the dashboard query to show only final v2 scores instead of duplicating v1 and v2 rows. Rebuilt and verified the app and backend after the fix.
+
+### 2026-08-27 - working tree
+The final Camoufox verification confirmed the completed report now shows English count labels and one final score per listing. The settings dialog, Convex-backed search submission, report link, and guarded email form all rendered successfully. The production-host build was restored and the 21-test suite passed.

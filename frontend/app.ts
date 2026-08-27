@@ -233,11 +233,11 @@ function renderJobView(job: any) {
   const c = job.counts ?? {};
   $("counts").innerHTML = "";
   const chips: Array<[string, number]> = [
-    ["anuncios", c.scraped ?? 0],
-    ["válidos", c.valid ?? 0],
-    ["excluidos", c.excluded ?? 0],
-    ["visión evaluable", c.visionEvaluable ?? 0],
-    ["visión n/e", c.visionNoEvaluable ?? 0],
+    ["listings", c.scraped ?? 0],
+    ["valid", c.valid ?? 0],
+    ["excluded", c.excluded ?? 0],
+    ["vision evaluable", c.visionEvaluable ?? 0],
+    ["vision n/e", c.visionNoEvaluable ?? 0],
   ];
   for (const [label, n] of chips) {
     const d = el("div", "chip");
