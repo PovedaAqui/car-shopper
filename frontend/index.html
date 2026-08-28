@@ -26,10 +26,10 @@
         <h2 id="search-h">Find your next car</h2>
         <form id="search-form">
           <div class="grid">
-            <label>Make <input name="make" required value="Toyota" maxlength="40"></label>
-            <label>Model <input name="model" required value="Yaris" maxlength="40"></label>
-            <label>Maximum price (€) <input name="maxPrice" type="number" required min="100" max="1000000" value="5000"></label>
-            <label>Region <input name="region" required value="Barcelona / Zaragoza" maxlength="60"></label>
+            <label>Make <input name="make" required value="" placeholder="e.g. Toyota" maxlength="40"></label>
+            <label>Model <input name="model" required value="" placeholder="e.g. Yaris" maxlength="40"></label>
+            <label>Maximum price (€) <input name="maxPrice" type="number" required min="100" max="1000000" placeholder="e.g. 5000"></label>
+            <label>Region <input name="region" required value="" placeholder="e.g. Barcelona" maxlength="60"></label>
             <label>Maximum kilometres (optional) <input name="maxKm" type="number" min="0" placeholder="any distance"></label>
           </div>
           <button type="submit" id="search-btn">Build my ranking</button>
@@ -112,7 +112,7 @@
     </dialog>
 
     <footer class="foot">
-      <p>Data: fixture from the 2026-08-26 reference session (20 Toyota Yaris listings, up to €5,000). Inference uses a local OpenAI-compatible endpoint with no model-cloud egress. This report does not replace an in-person mechanical inspection.</p>
+      <p>Data: live scrape of coches.net at run time (via Firecrawl) — every job lists the real ads available for your criteria at that moment. Visual inspection uses a configurable OpenAI-compatible model endpoint; when a listing cannot be assessed honestly it is marked "no_evaluable" instead of being invented. This report does not replace an in-person mechanical inspection.</p>
     </footer>
   </div>
   <script src="/app.js"></script>
