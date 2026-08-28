@@ -104,11 +104,30 @@ setupSettings();
 
 function esc(s: unknown): string {
   return String(s ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function friendlyError(error: unknown): string {
+  // The Convex client wraps server errors as "[Request ID: …] Server Error
+  // Called by client" and stashes the original thrown error on `.data`, so the
+  // marker lives in `data`, not `message`. Build a haystack from the whole
+  // error object and match against it.
+  const e = error as { message?: unknown; code?: unknown; stack?: unknown; data?: unknown } | undefined;
+  const parts: unknown[] = e ? [e.message, e.code, e.stack, e.data, error] : [error];
+  const haystack = parts
+    .map((p) => {
+      if (p == null) return "";
+      if (typeof p === "string") return p;
+      try { return JSON.stringify(p); } catch { return String(p); }
+    })
+    .join("\n");
+  if (haystack.includes("FREE_TIER_EXHAUSTED")) return "Your free search for today has already been used. Try again tomorrow.";
+  if (haystack.includes("NO_LISTINGS")) return "No listings matched those criteria. Try a broader search.";
+  return "The search could not be created. Please try again.";
 }
 
 function el(tag: string, cls: string, text = ""): HTMLElement {
@@ -375,14 +394,25 @@ form.addEventListener("submit", async (e) => {
   const btn = $("search-btn") as HTMLButtonElement;
   btn.disabled = true;
   try {
-    const created = await client.mutation(api.api.create, { userId, criteria });
+    const created: any = await client.mutation(api.api.create, { userId, criteria });
+    // Production Convex redacts thrown error messages, so the mutation returns
+    // a structured rejection ({ code }) for known client-facing cases instead
+    // of throwing. Map those codes to friendly messages.
+    if (created && (created.code === "FREE_TIER_EXHAUSTED" || created.code === "PRICE_OUT_OF_RANGE")) {
+      err.hidden = false;
+      err.textContent =
+        created.code === "FREE_TIER_EXHAUSTED"
+          ? "Your free search for today has already been used. Try again tomorrow."
+          : "Please enter a price between €100 and €1,000,000.";
+      return;
+    }
     const jobId = typeof created === "string" ? created : created?.jobId;
     if (!jobId) throw new Error("CREATE_JOB_FAILED: Convex returned no job id");
     openJob(jobId);
     window.scrollTo({ top: $("dashboard").offsetTop - 16, behavior: "smooth" });
   } catch (e: any) {
     err.hidden = false;
-    err.textContent = e?.message ?? String(e);
+    err.textContent = friendlyError(e);
   } finally {
     btn.disabled = false;
   }

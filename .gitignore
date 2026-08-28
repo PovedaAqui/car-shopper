@@ -14,3 +14,10 @@ worker/state/
 
 # Local working state report — never commit/push
 STATE.md
+
+# Local-to-production execution plan — contains operational notes
+LOCAL_TO_PRODUCTION_PLAN.md
+
+# Secrets / credentials — NEVER commit or push
+hackathon-keys
+.env.local

@@ -29,7 +29,9 @@ export const create = mutation({
   },
   handler: async (ctx, args) => {
     if (args.criteria.maxPrice < 100 || args.criteria.maxPrice > 1_000_000) {
-      throw new Error("maxPrice out of range");
+      // Return (not throw): production Convex redacts thrown error messages,
+      // so the marker would not reach the client to render a friendly message.
+      return { jobId: null, code: "PRICE_OUT_OF_RANGE", status: "rejected" as const };
     }
     const now = Date.now();
     const dayStart = new Date(now).setUTCHours(0, 0, 0, 0);
@@ -50,7 +52,10 @@ export const create = mutation({
       .filter((c) => c.createdAt >= dayStart);
     const available = credits.filter((c) => c.consumedByJobId === undefined).length;
     if (available < 1) {
-      throw new Error("FREE_TIER_EXHAUSTED: one free search per day. Try again tomorrow.");
+      // Return (not throw): production Convex redacts thrown error messages, so
+      // a thrown FREE_TIER_EXHAUSTED would arrive as a generic "Server Error"
+      // and the friendly message could never render. Return the marker instead.
+      return { jobId: null, code: "FREE_TIER_EXHAUSTED", status: "rejected" as const };
     }
 
     const idempotencyKey = `${args.userId}:${hashCriteria(args.criteria)}`;

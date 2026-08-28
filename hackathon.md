@@ -3,16 +3,16 @@
 - **Project:** Car Shopper
 - **Event:** Convex All Gas Hackathon
 - **What it does:** Local-AI car shopping comparison app. Ranks fixture listings by €/km, runs two independent vision passes, produces a ranked HTML report, and can email that report as an HTML body via AgentMail.
-- **Live app:** not deployed
+- **Live app:** https://glorious-monitor-400.convex.site
 - **Repo:** https://github.com/PovedaAqui/car-shopper
 - **Frontend:** Convex static hosting
-- **Convex deployment:** not deployed
+- **Convex deployment:** https://glorious-monitor-400.convex.cloud (prod, `luis-poveda:car-shopper:main`, region us)
 - **Components:** @convex-dev/static-hosting, @agentmail/convex
 - **Convex features:** schema, queries, mutations, actions, crons, HTTP actions, realtime subscriptions, File Storage
 - **Auth:** none
 - **AI models:** qwen38-27b-unsloth-nvfp4-dflash2 (local vLLM), Ollama/LM Studio adapters
 - **Started:** 2026-08-26T16:25:21Z
-- **Last updated:** 2026-08-27T12:18:53Z
+- **Last updated:** 2026-08-28T11:38:01Z
 
 ## Log
 
@@ -51,3 +51,12 @@ Completed a Camoufox browser pass over settings, search submission, Convex job s
 
 ### 2026-08-27 - working tree
 The final Camoufox verification confirmed the completed report now shows English count labels and one final score per listing. The settings dialog, Convex-backed search submission, report link, and guarded email form all rendered successfully. The production-host build was restored and the 21-test suite passed.
+
+### 2026-08-28 - production deployment
+Deployed to Convex Cloud: prod deployment `luis-poveda:car-shopper:main` (region us) at `https://glorious-monitor-400.convex.cloud`; frontend published via `@convex-dev/static-hosting` to the public URL `https://glorious-monitor-400.convex.site` (served unauthenticated). Set the production environment on the deployment (`WORKER_API_KEY`, `AGENTMAIL_API_KEY`, `AGENTMAIL_INBOX_ID`); keys live only in git-ignored files and the deployment env. Ran the worker as a separate service against the prod deployment.
+
+### 2026-08-28 - production verification
+Ran the end-to-end acceptance flow on the public URL: browser search → Convex job → realtime stage updates → worker claim → 18 ranked / 2 excluded listings (corrupt and duplicate rows flagged) → HTML report served from Convex File Storage. Verified independently in the worker log (claim + completion lines). Verified production hardening: the dev `x-worker-mode: dev` header and missing/incorrect worker keys are rejected with 401; the public bundle contains no credentials. Vision is honest: the local vLLM model is text-only, so listings report `no_evaluable` unless reference vision is explicitly enabled (not enabled in production). The free-tier limit rejects a second same-day search with a user-facing message.
+
+### 2026-08-28 - friendly error fix
+Discovered during production verification that Convex redacts thrown error messages on production deployments (the client receives a generic "Server Error" plus a request ID), so thrown markers could never reach the frontend. Changed the `create` mutation to return structured rejections (`code: FREE_TIER_EXHAUSTED` / `PRICE_OUT_OF_RANGE`) instead of throwing, and mapped those codes to user-facing messages in the frontend. Verified live: the second same-day search now shows the friendly "free search already used" message. Typecheck and the 21-test suite pass; backend and frontend redeployed to the same prod deployment.
