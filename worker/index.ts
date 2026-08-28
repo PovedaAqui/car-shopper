@@ -4,15 +4,15 @@
  * Modes:
  *  - default: poll Convex for queued jobs, run the pipeline, write results
  *    back through the authenticated worker HTTP API (long-running).
- *  - --local: run one job entirely offline (fixtures + reference vision),
- *    save the HTML report to ./worker/state/local_report.html. Used to
- *    verify the pipeline end-to-end without a deployment.
+ *  - --local: run one job without Convex, using criteria from the environment
+ *    (LOCAL_MAKE/LOCAL_MODEL/LOCAL_MAX_PRICE/LOCAL_REGION), save the HTML
+ *    report to ./worker/state/local_report.html. Live scraping and live
+ *    vision; no fixed inputs.
  *
  * Env:
  *  MODEL_BASE_URL / MODEL_NAME  local OpenAI-compatible endpoint (vLLM)
  *  VISION_MODE                  local_inference_only (default) | local_preferred
  *  MODEL_IS_VISION=1            the served model accepts image inputs
- *  ALLOW_REFERENCE_VISION=1     demo/test-only deterministic fixture fallback
  *  POLL_MS                      poll interval (default 5000)
  */
 
@@ -97,8 +97,12 @@ async function runAgainstConvex(cfg: WorkerConfig): Promise<void> {
 }
 
 async function runLocalOnce(): Promise<void> {
-  log("local mode: running one fixture job without Convex");
-  const criteria: ScrapeCriteria = { make: "Toyota", model: "Yaris", maxPrice: 5000, region: "Barcelona/Zaragoza" };
+  log("local mode: running one live job without Convex (criteria from environment)");
+  const make = process.env.LOCAL_MAKE ?? "Toyota";
+  const model = process.env.LOCAL_MODEL ?? "Yaris";
+  const maxPrice = Number(process.env.LOCAL_MAX_PRICE ?? 5000);
+  const region = process.env.LOCAL_REGION ?? "Barcelona";
+  const criteria: ScrapeCriteria = { make, model, maxPrice, region };
   const stateDir = join(here, "state");
   mkdirSync(stateDir, { recursive: true });
   const reportPath = join(stateDir, "local_report.html");

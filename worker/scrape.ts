@@ -1,14 +1,12 @@
 /**
  * Scraping stage (plan §4 stage 1).
  *
- * Fixtures remain the default because production scraping of coches.net has
- * ToS and rate-limit implications. A real Firecrawl-backed source is available
- * as an explicit opt-in with USE_FIRECRAWL=1 and FIRECRAWL_API_KEY.
+ * LIVE only: every job scrapes coches.net in real time through Firecrawl
+ * (category page built from the job criteria). There are no fixed inputs,
+ * fixtures, or hardcoded workflows: the listings in each report are the ads
+ * coches.net serves at run time. If the live source fails, the job fails —
+ * the pipeline never invents or substitutes data.
  */
-
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 
 export interface RawListing {
   source: string;
@@ -31,6 +29,8 @@ export interface RawListing {
 
 export interface ScrapeSource {
   name: string;
+  /** Human-readable label for the report ("fuente: ..."). */
+  label(): string;
   scrape(criteria: ScrapeCriteria): Promise<RawListing[]>;
 }
 
@@ -44,98 +44,173 @@ export interface ScrapeCriteria {
   maxPhotos?: number;
 }
 
-/** Fixture-backed source (the only one shipped in this build). */
-export class FixtureSource implements ScrapeSource {
-  name = "fixtures";
-  constructor(private fixturePath: string) {}
+/** Region words → coches.net city slugs (first match wins; none → national). */
+const REGION_SLUGS: Array<[string, string]> = [
+  ["barcelona", "barcelona"],
+  ["zaragoza", "zaragoza"],
+  ["madrid", "madrid"],
+  ["valencia", "valencia"],
+  ["sevilla", "sevilla"],
+  ["bilbao", "bilbao"],
+  ["alicante", "alicante"],
+  ["murcia", "murcia"],
+  ["málaga", "malaga"],
+  ["malaga", "malaga"],
+  ["las palmas", "las-palmas"],
+];
+
+export function regionSlug(region: string): string | null {
+  const r = region.toLowerCase();
+  for (const [word, slug] of REGION_SLUGS) {
+    if (r.includes(word)) return slug;
+  }
+  return null;
+}
+
+/** Category URL for a criteria set, e.g. https://www.coches.net/toyota/yaris/segunda-mano/barcelona/?p=5000 */
+export function categoryUrl(criteria: ScrapeCriteria, page = 1): string {
+  const make = criteria.make.trim().toLowerCase().replace(/\s+/g, "");
+  const model = criteria.model.trim().toLowerCase().replace(/\s+/g, "");
+  const slug = regionSlug(criteria.region);
+  const base = `https://www.coches.net/${make}/${model}/segunda-mano${slug ? `/${slug}` : ""}`;
+  const q = new URLSearchParams();
+  if (criteria.maxPrice > 0) q.set("p", String(Math.round(criteria.maxPrice)));
+  q.set("pg", String(page));
+  return `${base}/?${q.toString()}`;
+}
+
+/**
+ * Live coches.net adapter via Firecrawl `scrape`: fetches the category page
+ * built from the job criteria and parses the ad cards from the markdown.
+ * Every field is extracted only when actually present; incomplete rows are
+ * left for the normalizer to reject (corrupt rules). No fixture data is mixed in.
+ */
+export class FirecrawlSource implements ScrapeSource {
+  name = "firecrawl";
+  private lastLabel = "coches.net (en vivo)";
+
+  constructor(private apiKey: string, private endpoint = "https://api.firecrawl.dev/v1", private maxPages = 3) {}
+
+  label(): string {
+    return this.lastLabel;
+  }
 
   async scrape(criteria: ScrapeCriteria): Promise<RawListing[]> {
-    const raw = JSON.parse(readFileSync(this.fixturePath, "utf-8"));
-    let listings: RawListing[] = raw.listings;
-    // Apply the criteria filters the same way the portal would.
-    if (criteria.maxPrice) {
-      listings = listings.filter((l) => l.price <= criteria.maxPrice);
+    const seen = new Map<string, RawListing>();
+    for (let pg = 1; pg <= this.maxPages; pg++) {
+      const url = categoryUrl(criteria, pg);
+      const markdown = await this.fetchMarkdown(url);
+      const cards = parseCategoryCards(markdown, criteria);
+      if (cards.length === 0) break; // last page / empty scope
+      for (const c of cards) {
+        // The capped category page can still render ads above the cap; drop them.
+        if (criteria.maxPrice > 0 && c.price > criteria.maxPrice) continue;
+        if (!seen.has(c.adId)) seen.set(c.adId, c);
+      }
     }
-    if (criteria.maxKm != null && criteria.maxKm > 0) {
-      const maxKm = criteria.maxKm;
-      listings = listings.filter((l) => l.km <= maxKm);
+    if (seen.size === 0) {
+      throw new Error("NO_LISTINGS: no se encontraron anuncios en coches.net para estos criterios");
     }
-    // Region filter is loose: fixtures are Zaragoza/Barcelona only.
-    return listings.map((l) => ({ ...l, fetchedAt: Date.now() }));
+    const slug = regionSlug(criteria.region);
+    this.lastLabel = `coches.net (en vivo, scrape ${new Date().toLocaleDateString("es-ES")} · ${slug ?? "ámbito nacional"})`;
+    return [...seen.values()];
+  }
+
+  private async fetchMarkdown(url: string): Promise<string> {
+    const response = await fetch(`${this.endpoint.replace(/\/$/, "")}/scrape`, {
+      method: "POST",
+      headers: { authorization: "Bearer " + this.apiKey, "content-type": "application/json" },
+      body: JSON.stringify({ url, formats: ["markdown"] }),
+    });
+    const payload: any = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(`FIRECRAWL_HTTP_${response.status}: ${payload?.error ?? "scrape failed"}`);
+    }
+    return String(payload?.data?.markdown ?? "");
   }
 }
 
 /**
- * Firecrawl search adapter. Firecrawl returns search results with markdown;
- * the parser extracts only fields that are actually present and leaves
- * incomplete rows for the normalizer to reject. No fixture data is mixed in.
+ * Parse coches.net category cards from Firecrawl markdown.
+ * Card shape (observed live 2026-08-28):
+ *   ## [TOYOTA Yaris 1.5 125 SEdition](https://www.coches.net/toyota-yaris-...-71027732-covo.aspx)
+ *   ... 15.900 € / Financiado: **14.600 €** ...
+ *   - Gasolina
+ *   - 2022
+ *   - 78,915 km
+ *   - 125 cv
+ *   - Barcelona
+ *   Profesional 4.1
+ *   ![TOYOTA Yaris 1.5 125 SEdition](https://a.ccdn.es/cnet/vehicles/.../560x421cut/)
  */
-export class FirecrawlSource implements ScrapeSource {
-  name = "firecrawl";
-  constructor(private apiKey: string, private endpoint = "https://api.firecrawl.dev/v1") {}
+export function parseCategoryCards(markdown: string, criteria: ScrapeCriteria): RawListing[] {
+  const fetchedAt = Date.now();
+  const cardRe =
+    /##\s*\[([^\]]+)\]\((https:\/\/www\.coches\.net\/[^\s)]*?-(\d{6,})-[^\s)]*?\.aspx)\)([\s\S]*?)(?=\n##\s|\n\[\d+ de|## Anuncios|$)/g;
+  const out: RawListing[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = cardRe.exec(markdown)) !== null) {
+    const title = m[1].trim();
+    const sourceUrl = m[2];
+    const adId = m[3];
+    const block = m[4].replace(/\n{2,}/g, "\n");
 
-  async scrape(criteria: ScrapeCriteria): Promise<RawListing[]> {
-    const query = `${criteria.make} ${criteria.model} coches.net ${criteria.region}`;
-    const response = await fetch(`${this.endpoint.replace(/\/$/, "")}/search`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
-      body: JSON.stringify({ query, limit: 20, scrapeOptions: { formats: ["markdown"] } }),
+    // Price: first plausible € amount, preferring one within the cap (the
+    // "Financiado" line can appear with a different amount).
+    const priceMatches = [...block.matchAll(/([\d][\d.]*)\s*€/g)]
+      .map((x) => parseNum(x[1]))
+      .filter((p) => p > 0);
+    const within = priceMatches.find((p) => p <= criteria.maxPrice * 1.5);
+    const price = within ?? (priceMatches[0] > 0 ? priceMatches[0] : 0);
+
+    // Mileage: the card bullet reads e.g. "- 78,915 km" (comma = thousands).
+    const kmMatch = block.match(/-?\s*([\d][\d.,]*)\s*km\b/i);
+    const km = kmMatch ? parseNum(kmMatch[1]) : 0;
+
+    // Year: prefer a 4-digit year line; fall back to the URL suffix.
+    const yearMatch = block.match(/^-\s*((?:19|20)\d{2})\s*$/m) ?? sourceUrl.match(/-(\d{4})-en-/);
+    const year = yearMatch ? Number(yearMatch[1]) : null;
+
+    const fuelMatch = block.match(/-\s*((?:Gasolina|Di[és]el|H[íi]brido|El[ée]ctrico|GLP)[^-\n]*)/i);
+    const photoUrls: string[] = [];
+    for (const p of block.matchAll(/!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/g)) {
+      const u = p[1];
+      // Only real vehicle photos (a.ccdn.es/cnet/vehicles/...); skip icons/logos.
+      if (u.includes("/cnet/vehicles/")) photoUrls.push(u);
+    }
+
+    out.push({
+      source: "firecrawl",
+      adId,
+      sourceUrl,
+      title,
+      price,
+      km,
+      year,
+      fuel: fuelMatch ? fuelMatch[1].trim() : null,
+      city: criteria.region,
+      hasWarranty: /garant[ií]a|warranty/i.test(block),
+      isPro: /profesional/i.test(block),
+      photoCount: photoUrls.length,
+      photoUrls,
+      dataQualityFlag: "ok",
+      fetchedAt,
     });
-    const payload: any = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(`FIRECRAWL_HTTP_${response.status}: ${payload?.error ?? "search failed"}`);
-    const rows = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.results) ? payload.results : [];
-    const fetchedAt = Date.now();
-    return rows
-      .map((row: any, index: number) => {
-        const url = String(row?.url ?? row?.link ?? "");
-        const text = `${row?.title ?? ""}\n${row?.description ?? ""}\n${row?.markdown ?? ""}`;
-        if (!url || !text) return null;
-        const price = firstNumber(text, /(\d[\d.\s]*)\s*(?:€|eur|euros?)/i);
-        const km = firstNumber(text, /(\d[\d.\s]*)\s*(?:km|kms|kil[oó]metros?)/i);
-        const year = firstNumber(text, /\b(20\d{2}|19\d{2})\b/);
-        const photoUrls = [...text.matchAll(/!\[[^\]]*\]\((https?:\/\/[^\s)]+)\)/g)].map((m) => m[1]);
-        return {
-          source: "firecrawl",
-          adId: adIdFromUrl(url, index),
-          sourceUrl: url,
-          title: String(row?.title ?? `${criteria.make} ${criteria.model}`),
-          price,
-          km,
-          year: year || null,
-          city: criteria.region,
-          hasWarranty: /garant[ií]a|warranty/i.test(text),
-          isPro: /profesional|concesionario|dealer/i.test(text),
-          photoCount: photoUrls.length,
-          photoUrls,
-          dataQualityFlag: "ok" as const,
-          fetchedAt,
-        } satisfies RawListing;
-      })
-      .filter((row: RawListing | null): row is RawListing => row !== null);
   }
+  return out;
 }
 
-function firstNumber(text: string, pattern: RegExp): number {
-  const match = text.match(pattern);
-  if (!match) return 0;
-  const normalized = match[1].replace(/[.\s]/g, "");
+/** "78,915" / "78.915" / "112000" → 78915 (first separator wins as thousands). */
+function parseNum(s: string): number {
+  const normalized = s.replace(/[.\s]/g, "").replace(/,/g, "");
   const value = Number(normalized);
   return Number.isFinite(value) ? value : 0;
 }
 
-function adIdFromUrl(url: string, fallback: number): string {
-  const match = url.match(/-(\d{6,})(?:-[^/]+)?\.(?:aspx|html?)?$/i) ?? url.match(/(\d{6,})/);
-  return match?.[1] ?? `firecrawl-${fallback + 1}`;
-}
-
 export function defaultSource(): ScrapeSource {
-  const here = dirname(fileURLToPath(import.meta.url));
-  if (process.env.USE_FIRECRAWL === "1") {
-    const apiKey = process.env.FIRECRAWL_API_KEY;
-    if (!apiKey) throw new Error("FIRECRAWL_NOT_CONFIGURED: set FIRECRAWL_API_KEY");
-    return new FirecrawlSource(apiKey, process.env.FIRECRAWL_BASE_URL ?? "https://api.firecrawl.dev/v1");
-  }
-  return new FixtureSource(join(here, "fixtures", "coches_net_yaris_5000.json"));
+  const apiKey = process.env.FIRECRAWL_API_KEY;
+  if (!apiKey) throw new Error("FIRECRAWL_NOT_CONFIGURED: set FIRECRAWL_API_KEY");
+  return new FirecrawlSource(apiKey, process.env.FIRECRAWL_BASE_URL ?? "https://api.firecrawl.dev/v1");
 }
 
 /**

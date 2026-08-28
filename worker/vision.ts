@@ -8,16 +8,12 @@
  * available or cannot produce schema-valid output, the result is
  * `no_evaluable` — never invented.
  *
- * Backends:
- *  - local OpenAI-compatible endpoint (vLLM default), Ollama, LM Studio via
- *    the provider abstraction (health-gated)
- *  - deterministic reference fixture (the 2026-08-26 session results) only
- *    when explicitly enabled with ALLOW_REFERENCE_VISION=1 for demos/tests
+ * Backend: local OpenAI-compatible endpoint (vLLM default), Ollama, LM Studio
+ * via the provider abstraction (health-gated). There is no fixture fallback:
+ * vision results always come from a real model call or are honestly marked
+ * `no_evaluable` with the reason.
  */
 
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import type { ModelConfig, Health } from "./providers.ts";
 import {
   ProviderError,
@@ -164,37 +160,10 @@ async function analyzeWithModel(
   }
 }
 
-/** Deterministic fallback: reference session results (same schema). */
-export function referenceVision(listing: RawListing, step: "primary" | "reverify"): VisionResult {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const data = JSON.parse(readFileSync(join(here, "fixtures", "vision_reference.json"), "utf-8"));
-  const ref = data.results.find((r: any) => r.adId === listing.adId);
-  if (!ref) {
-    return noEvaluable(listing.adId, "reference-session", "n/a", step, "sin referencia en fixture");
-  }
-  return {
-    adId: listing.adId,
-    provider: "reference-session",
-    model: "fixture-2026-08-26",
-    step,
-    promptVersion: PROMPT_VERSION,
-    photosAnalyzed: ref.photosAnalyzed ?? 0,
-    photoType: ref.photoType,
-    exteriorState: ref.exteriorState,
-    interiorState: normInterior(ref.interiorState),
-    cleanliness: normClean(ref.cleanliness),
-    color: ref.color ?? null,
-    redFlags: ref.redFlags ?? [],
-    details: ref.details ?? null,
-    noEvaluableReason: ref.exteriorState === "no_evaluable" ? "no evaluable en la sesión de referencia" : null,
-  };
-}
-
 export interface VisionOutcome {
   primary: VisionResult[];
   reverify: VisionResult[];
   providerLabel: string;
-  usedReference: boolean;
 }
 
 /**
@@ -217,17 +186,12 @@ export async function runVision(
   );
 
   if (!active || !decision || active.visionCapable !== true) {
-    if (process.env.ALLOW_REFERENCE_VISION === "1") {
-      const primary = listings.map((l) => referenceVision(l, "primary"));
-      const reverify = listings.map((l) => referenceVision(l, "reverify"));
-      return { primary, reverify, providerLabel: "reference-session (explicit demo fixture)", usedReference: true };
-    }
     const reason = decision?.fallbackReason ?? health?.detail ?? "no healthy vision-capable provider configured";
     const provider = active?.provider ?? "none";
     const model = active?.model ?? "n/a";
     const primary = listings.map((l) => noEvaluable(l.adId, provider, model, "primary", reason));
     const reverify = listings.map((l) => noEvaluable(l.adId, provider, model, "reverify", reason));
-    return { primary, reverify, providerLabel: `${provider}/${model} (no vision result)`, usedReference: false };
+    return { primary, reverify, providerLabel: `${provider}/${model} (no vision result)` };
   }
 
   const primary: VisionResult[] = [];
@@ -241,6 +205,5 @@ export async function runVision(
     primary,
     reverify,
     providerLabel: `${decision.provider}/${decision.model}${decision.fallbackUsed ? " (fallback)" : ""}`,
-    usedReference: false,
   };
 }

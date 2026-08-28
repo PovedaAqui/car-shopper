@@ -13,7 +13,7 @@ const dummyCfg: WorkerConfig = {
 };
 
 const listing: RawListing = {
-  source: "fixtures",
+  source: "firecrawl",
   adId: "cached",
   sourceUrl: "https://example.test/c",
   title: "Cached Yaris",

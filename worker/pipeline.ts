@@ -1,7 +1,7 @@
 /**
  * Pipeline orchestrator (plan §4, 8 stages):
  *
- *   1. scrape (fixtures)  2. normalize  3. rank v1  4. vision primary
+ *   1. scrape (coches.net, en vivo vía Firecrawl)  2. normalize  3. rank v1  4. vision primary
  *   5. vision reverify    6. consensus  7. rank v2  8. report
  *
  * Deterministic core (scoring/consensus) + LLM only for vision. Each stage
@@ -34,7 +34,6 @@ export interface PipelineResult {
   visionEvaluable: number;
   visionNoEvaluable: number;
   providerLabel: string;
-  usedReferenceVision: boolean;
   reportBytes: number;
 }
 
@@ -51,7 +50,7 @@ export async function runPipeline(
     snapshot?: JobSnapshot | null;
   } = {}
 ): Promise<PipelineResult> {
-  const source = opts.source ?? defaultSource();
+  const source = opts.source ?? null; // resolved lazily below (a snapshot run never scrapes)
   const mode = opts.mode ?? ((process.env.VISION_MODE as any) ?? "local_inference_only");
   const models = defaultModels();
   const snap = opts.snapshot ?? null;
@@ -70,7 +69,7 @@ export async function runPipeline(
   } else {
     // --- 1. Scrape -----------------------------------------------------------
     await progress.onStage("scraping", 5);
-    const raw = await source.scrape(criteria);
+    const raw = await (source ?? defaultSource()).scrape(criteria);
     if (raw.length === 0) {
       throw new Error("NO_LISTINGS: the source returned zero listings for these criteria");
     }
@@ -125,7 +124,6 @@ export async function runPipeline(
       primary: snap.visionPrimary,
       reverify: snap.visionReverify.length > 0 ? snap.visionReverify : snap.visionPrimary,
       providerLabel: snap.visionPrimary[0]?.provider ?? "cached",
-      usedReference: snap.visionPrimary[0]?.provider === "reference-session",
     };
   } else {
     const model = opts.model !== undefined ? opts.model : models.visionPrimary;
@@ -222,7 +220,7 @@ export async function runPipeline(
     visionPrimary: vision.primary,
     consensus,
     providerLabel: vision.providerLabel,
-    usedReferenceVision: vision.usedReference,
+    sourceLabel: source?.label(),
     generatedAt: Date.now(),
     jobStage: "completed",
   };
@@ -240,7 +238,6 @@ export async function runPipeline(
     visionEvaluable: vision.primary.filter((v) => v.exteriorState !== "no_evaluable").length,
     visionNoEvaluable: vision.primary.filter((v) => v.exteriorState === "no_evaluable").length,
     providerLabel: vision.providerLabel,
-    usedReferenceVision: vision.usedReference,
     reportBytes: Buffer.byteLength(html, "utf-8"),
   };
 }

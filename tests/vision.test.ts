@@ -6,7 +6,7 @@ import type { RawListing } from "../worker/scrape.ts";
 
 function listing(adId: string, photos: string[]): RawListing {
   return {
-    source: "fixtures",
+    source: "firecrawl",
     adId,
     sourceUrl: `https://example.test/${adId}`,
     title: `Test ${adId}`,

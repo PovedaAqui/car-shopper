@@ -3,17 +3,18 @@
 Async car-comparison web app built for the **Convex All Gas Hackathon**.
 
 A user submits search criteria (make, model, max price, region, optional max km).
-A **local worker** runs a staged pipeline — scrape (fixtures in this build),
-normalize, deterministic €/km scoring, two independent vision passes through a
+A **local worker** runs a staged pipeline — live scrape of coches.net (via
+Firecrawl, category page built from the job criteria), normalize,
+deterministic €/km scoring, two independent vision passes through a
 local OpenAI-compatible endpoint, deterministic consensus + re-ranking, and an
 HTML report — and writes every transition back to **Convex**, where the
 dashboard updates **in realtime** via subscriptions. The finished report can be
 viewed in the dashboard or **emailed to any address as an HTML body** (via
 AgentMail, never as an attachment).
 
-This is the **Phase 1 MVP** from the product plan (`car-compare-webapp-plan.md`):
-fixtures, no production scraping, no payments. See §What is intentionally NOT
-in this build.
+There are **no fixed inputs**: every job's listings are the ads coches.net
+serves at run time, scraped live. If the live source fails, the job fails —
+the pipeline never invents or substitutes data.
 
 ## Stack
 
@@ -38,7 +39,6 @@ convex/            Convex backend (schema, public + internal functions, crons,
                    HTTP router, email + email_send actions, AgentMail webhook)
 frontend/          Static frontend sources (dashboard, form, report view, email form)
 worker/            Local pipeline worker (providers, stages, report, convex client)
-  fixtures/        Scraped-listing fixtures (20 Toyota Yaris, coches.net)
 tests/             Vitest unit tests (scoring, providers, pipeline, consensus,
                    normalize, report, email)
 scripts/           Build helpers (frontend → dist/)
@@ -53,7 +53,7 @@ npx convex dev          # login + push schema/functions + watch
 npm run worker          # run the local worker (polls the deployment for jobs)
 npm run build           # typecheck + build static frontend to dist/
 npm test                # unit tests (vitest)
-npm run worker -- --local   # run one pipeline against fixtures, write state/locally
+npm run worker -- --local   # run one live job without Convex (criteria via LOCAL_* env), report to worker/state/
 ```
 
 For a real email send, set the AgentMail vars on the deployment (see
@@ -77,12 +77,10 @@ from the repo**. `.env.local` is git-ignored.
 | `VISION_PRIMARY_BASE_URL` | `MODEL_BASE_URL` | Override the vision endpoint, e.g. an OpenRouter-compatible URL |
 | `VISION_PRIMARY_MODEL` | `MODEL_NAME` | Override the vision model identifier |
 | `OPENROUTER_API_KEY` | unset | Optional runtime key for an explicitly configured OpenRouter endpoint |
-| `ALLOW_REFERENCE_VISION` | `0` | Demo/test-only opt-in to deterministic reference results; never enabled by default |
 | `OLLAMA_URL` / `LMSTUDIO_URL` | off | Optional extra local providers |
-| `USE_FIXTURES` | `1` | `1` = scrape stage reads fixtures (no production scraping in this build) |
-| `USE_FIRECRAWL` | `0` | `1` = explicitly use the Firecrawl search adapter instead of fixtures |
-| `FIRECRAWL_API_KEY` | unset | Firecrawl runtime key; never commit it |
+| `FIRECRAWL_API_KEY` | unset | **Required** — Firecrawl runtime key used to scrape coches.net live; never commit it |
 | `FIRECRAWL_BASE_URL` | `https://api.firecrawl.dev/v1` | Optional Firecrawl-compatible endpoint |
+| `LOCAL_MAKE` / `LOCAL_MODEL` / `LOCAL_MAX_PRICE` / `LOCAL_REGION` | Toyota/Yaris/5000/Barcelona | Criteria for the one-shot `--local` run |
 | `AGENTMAIL_API_KEY` | unset | Convex env — required for a real email send |
 | `AGENTMAIL_INBOX_ID` | created on first send | Optional existing AgentMail inbox |
 | `AGENTMAIL_WEBHOOK_SECRET` | unset | Optional; bounce webhook at `/api/agentmail/webhook` |
@@ -102,19 +100,20 @@ README and code call this out deliberately rather than hiding it.
 
 ## What is intentionally NOT in this build
 
-- **Production scraping of coches.net** (ToS) — the scrape stage is served from
-  fixtures mirroring the real 2026-08-26 session (20 listings).
 - **Authentication**: ownership is keyed on a client-supplied `userId` (a UUID
   in `localStorage`) rather than real auth. Real auth (OAuth / magic email) is
   Phase 3 per the plan. This is a Phase-1 deferral, not a production control.
 - **Payments, share links with expiry** (schema placeholders exist).
 - **A live AgentMail send** until `AGENTMAIL_API_KEY` is set on the deployment.
 - **Deployment / hackathon submission** (explicitly out of scope unless asked).
+- **Scraping beyond the category pages**: only the category listing pages are
+  scraped (via Firecrawl); individual ad pages are not crawled.
 
 ## Tests
 
 `npm test` runs the Vitest suite: deterministic scoring, provider selection,
-normalize/dedup (the 370 €/568 km and 71108396/71108671 lessons), consensus
+normalize/dedup on synthetic live-card rows (the 370 €/568 km lesson), consensus
 resolution, report rendering, the pipeline end-to-end with a stubbed Convex
-client, and the email helpers (normalization, validation, hashing, HTML→text,
+client, the live Firecrawl parser/pagination against recorded card markdown, and
+the email helpers (normalization, validation, hashing, HTML→text,
 idempotency keys). All green.

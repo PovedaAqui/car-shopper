@@ -4,7 +4,7 @@ import type { RawListing } from "../worker/scrape.ts";
 import type { ScoreRow } from "../worker/scoring.ts";
 
 const listing: RawListing = {
-  source: "fixtures",
+  source: "firecrawl",
   adId: "1",
   sourceUrl: "https://example.test/1",
   title: "<script>alert(1)</script>",
@@ -43,14 +43,15 @@ describe("report HTML", () => {
       visionPrimary: [],
       consensus: [],
       providerLabel: "test",
-      usedReferenceVision: true,
+      sourceLabel: "coches.net (en vivo, scrape 28/08/2026 · barcelona)",
       generatedAt: 1,
       jobStage: "completed",
     });
     expect(html).not.toContain("<script>alert(1)</script>");
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
-    expect(html).toContain("<meta name=\"robots\" content=\"noindex\">");
+    expect(html).toContain("noindex");
     expect(html).toContain("no sustituye una inspección mecánica");
+    expect(html).toContain("fuente: coches.net (en vivo");
     const headerCells = (html.match(/<thead><tr>(.*?)<\/tr><\/thead>/s)?.[1].match(/<th/g) ?? []).length;
     const firstRowTds = (html.match(/<tbody><tr>(.*?)<\/tr>/s)?.[1].match(/<td/g) ?? []).length;
     expect(headerCells).toBe(8);

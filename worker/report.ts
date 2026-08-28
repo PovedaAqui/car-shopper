@@ -19,7 +19,8 @@ export interface ReportInput {
   visionPrimary: VisionResult[];
   consensus: ConsensusRow[];
   providerLabel: string;
-  usedReferenceVision: boolean;
+  /** "fuente: ..." label for the report meta line. */
+  sourceLabel?: string;
   generatedAt: number;
   jobStage: string;
 }
@@ -140,7 +141,7 @@ export function renderReportHTML(input: ReportInput): string {
 <body>
 <div class="wrap">
   <h1>${esc(criteria.make)} ${esc(criteria.model)} — ranking calidad/precio</h1>
-  <div class="meta">Máx. ${esc(criteria.maxPrice)} € · ${esc(criteria.region)}${criteria.maxKm ? ` · ≤ ${esc(criteria.maxKm)} km` : ""} · generado ${esc(new Date(input.generatedAt).toLocaleString("es-ES"))} · fuente: coches.net (fixture de la sesión 2026-08-26) · visión: ${esc(providerLabel)}</div>
+  <div class="meta">Máx. ${esc(criteria.maxPrice)} € · ${esc(criteria.region)}${criteria.maxKm ? ` · ≤ ${esc(criteria.maxKm)} km` : ""} · generado ${esc(new Date(input.generatedAt).toLocaleString("es-ES"))} · fuente: ${esc(input.sourceLabel ?? "coches.net")} · visión: ${esc(providerLabel)}</div>
 
   <div class="stats">
     <div class="stat"><b>${ranked.length}</b><span>coches en ranking</span></div>
