@@ -80,6 +80,36 @@ export interface Health {
 const DEFAULT_TIMEOUT = 120_000;
 const DEFAULT_START_TIMEOUT = 300_000;
 
+/** True for localhost/private endpoints (vLLM, Ollama, LM Studio). */
+function isLocalEndpoint(baseUrl: string): boolean {
+  try {
+    const h = new URL(baseUrl).hostname;
+    return (
+      h === "localhost" ||
+      h === "127.0.0.1" ||
+      h === "0.0.0.0" ||
+      h === "::1" ||
+      /^192\.168\./.test(h) ||
+      /^10\./.test(h) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(h)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve the provider kind for a vision endpoint. Explicit env wins;
+ * otherwise infer from the host: local hosts default to vLLM (which accepts
+ * vLLM-specific args like `chat_template_kwargs`), remote OpenAI-compatible
+ * APIs (e.g. api.openai.com) must be treated as strict `openai_compat` or
+ * they reject unknown body fields with HTTP 400.
+ */
+export function providerFor(baseUrl: string, explicit?: string): ProviderKind {
+  if (explicit) return explicit as ProviderKind;
+  return isLocalEndpoint(baseUrl) ? "vllm" : "openai_compat";
+}
+
 export function defaultModels(): {
   extraction: ModelConfig;
   visionPrimary: ModelConfig;
@@ -87,9 +117,11 @@ export function defaultModels(): {
 } {
   const base = process.env.MODEL_BASE_URL ?? "http://localhost:8000/v1";
   const model = process.env.MODEL_NAME ?? "qwen38-27b-unsloth-nvfp4-dflash2";
+  const vBase = process.env.VISION_PRIMARY_BASE_URL ?? base;
+  const vModel = process.env.VISION_PRIMARY_MODEL ?? model;
   return {
     extraction: {
-      provider: "vllm",
+      provider: providerFor(base, process.env.MODEL_PROVIDER),
       baseUrl: base,
       model,
       temperature: 0,
@@ -98,9 +130,9 @@ export function defaultModels(): {
       visionCapable: false,
     },
     visionPrimary: {
-      provider: (process.env.VISION_PRIMARY_PROVIDER as ProviderKind) ?? "vllm",
-      baseUrl: process.env.VISION_PRIMARY_BASE_URL ?? base,
-      model: process.env.VISION_PRIMARY_MODEL ?? model,
+      provider: providerFor(vBase, process.env.VISION_PRIMARY_PROVIDER),
+      baseUrl: vBase,
+      model: vModel,
       temperature: 0,
       maxTokens: 2048,
       disableThinking: true,
@@ -121,7 +153,10 @@ function timeoutSignal(ms: number): AbortSignal {
 export async function checkHealth(cfg: ModelConfig): Promise<Health> {
   const url = `${cfg.baseUrl.replace(/\/$/, "")}/models`;
   try {
-    const res = await fetch(url, { signal: timeoutSignal(cfg.startTimeoutMs ?? DEFAULT_START_TIMEOUT) });
+    const res = await fetch(url, {
+      signal: timeoutSignal(cfg.startTimeoutMs ?? DEFAULT_START_TIMEOUT),
+      headers: cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {},
+    });
     if (!res.ok) return { ok: false, baseUrl: cfg.baseUrl, model: cfg.model, detail: `HTTP ${res.status}` };
     const data: any = await res.json();
     const ids: string[] = (data?.data ?? []).map((m: any) => m.id ?? m.name).filter(Boolean);
@@ -147,7 +182,8 @@ export async function chat(cfg: ModelConfig, messages: ChatMessage[], opts?: { m
     temperature: cfg.temperature ?? 0,
     max_tokens: opts?.maxTokens ?? cfg.maxTokens ?? 2048,
   };
-  if (cfg.disableThinking && (cfg.provider === "vllm" || cfg.provider === "openai_compat")) {
+  if (cfg.disableThinking && cfg.provider === "vllm") {
+    // vLLM-only knob: OpenAI-compatible endpoints reject unknown arguments.
     body.chat_template_kwargs = { enable_thinking: false };
   }
   const doRequest = async (b: Record<string, unknown>): Promise<ChatResult> => {

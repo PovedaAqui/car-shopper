@@ -44,6 +44,31 @@ export interface ScrapeCriteria {
   maxPhotos?: number;
 }
 
+/**
+ * Extract real vehicle photo URLs from a coches.net page (markdown or html).
+ * Real car photos live on the `a.ccdn.es` asset CDN (a.ccdn.es/cnet/...).
+ * Every icon/logo/button is on a different host (s.ccdn.es, adit.gw.coches.net),
+ * so `a.ccdn.es` is the reliable discriminator. Deduped, order-preserving.
+ */
+export function extractPhotoUrls(text: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  // markdown images + raw url mentions; capture the base photo url (strip trailing size suffix).
+  const re = /https?:\/\/a\.ccdn\.es\/cnet\/[^"'<>\s)]+/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    let u = m[0];
+    // strip a trailing "/WxHcut/" size qualifier to canonicalize variants.
+    u = u.replace(/\/\d+x\d+(cut|crop)?\/?$/, "").replace(/&utm_.*$/, "");
+    if (u.length < 20) continue;
+    if (!seen.has(u)) {
+      seen.add(u);
+      out.push(u);
+    }
+  }
+  return out;
+}
+
 /** Region words → coches.net city slugs (first match wins; none → national). */
 const REGION_SLUGS: Array<[string, string]> = [
   ["barcelona", "barcelona"],
@@ -74,7 +99,9 @@ export function categoryUrl(criteria: ScrapeCriteria, page = 1): string {
   const slug = regionSlug(criteria.region);
   const base = `https://www.coches.net/${make}/${model}/segunda-mano${slug ? `/${slug}` : ""}`;
   const q = new URLSearchParams();
-  if (criteria.maxPrice > 0) q.set("p", String(Math.round(criteria.maxPrice)));
+  // `maxPrice` is coches.net's real max-price filter (verified live: every
+  // card under ?maxPrice=5000 priced <= 5000).
+  if (criteria.maxPrice > 0) q.set("maxPrice", String(Math.round(criteria.maxPrice)));
   q.set("pg", String(page));
   return `${base}/?${q.toString()}`;
 }
@@ -88,8 +115,18 @@ export function categoryUrl(criteria: ScrapeCriteria, page = 1): string {
 export class FirecrawlSource implements ScrapeSource {
   name = "firecrawl";
   private lastLabel = "coches.net (en vivo)";
+  /** Pacing between Firecrawl requests (free plan: 20 req/min window). */
+  private minIntervalMs: number;
+  private lastRequestAt = 0;
 
-  constructor(private apiKey: string, private endpoint = "https://api.firecrawl.dev/v1", private maxPages = 3) {}
+  constructor(
+    private apiKey: string,
+    private endpoint = "https://api.firecrawl.dev/v1",
+    private maxPages = 3,
+    pacingMs = Number(process.env.FIRECRAWL_MIN_INTERVAL_MS ?? 3500)
+  ) {
+    this.minIntervalMs = pacingMs >= 0 ? pacingMs : 3500;
+  }
 
   label(): string {
     return this.lastLabel;
@@ -99,7 +136,7 @@ export class FirecrawlSource implements ScrapeSource {
     const seen = new Map<string, RawListing>();
     for (let pg = 1; pg <= this.maxPages; pg++) {
       const url = categoryUrl(criteria, pg);
-      const markdown = await this.fetchMarkdown(url);
+      const markdown = await this.fetchRaw(url, ["markdown"]);
       const cards = parseCategoryCards(markdown, criteria);
       if (cards.length === 0) break; // last page / empty scope
       for (const c of cards) {
@@ -111,24 +148,86 @@ export class FirecrawlSource implements ScrapeSource {
     if (seen.size === 0) {
       throw new Error("NO_LISTINGS: no se encontraron anuncios en coches.net para estos criterios");
     }
+    // The category page carries no car photos (galleries are lazy-loaded), so
+    // fetch each ad's own page to collect its real photo set. Bounded by the
+    // user's maxPhotos setting (default 3): we only fetch what vision analyzes.
+    const photoCap = criteria.maxPhotos && criteria.maxPhotos > 0 ? criteria.maxPhotos : 3;
+    for (const l of seen.values()) {
+      if (criteria.maxPhotos === 0) continue; // vision explicitly off -> no photos needed
+      const photos = await this.enrichPhotos(l, photoCap);
+      if (photos.length > 0) {
+        l.photoUrls = photos;
+        l.photoCount = photos.length;
+      }
+    }
     const slug = regionSlug(criteria.region);
     this.lastLabel = `coches.net (en vivo, scrape ${new Date().toLocaleDateString("es-ES")} · ${slug ?? "ámbito nacional"})`;
     return [...seen.values()];
   }
 
-  private async fetchMarkdown(url: string): Promise<string> {
-    const response = await fetch(`${this.endpoint.replace(/\/$/, "")}/scrape`, {
-      method: "POST",
-      headers: { authorization: "Bearer " + this.apiKey, "content-type": "application/json" },
-      body: JSON.stringify({ url, formats: ["markdown"] }),
-    });
+  /** Fetch one ad page and return its real vehicle photo URLs (up to the cap). */
+  private async enrichPhotos(listing: RawListing, maxPhotosPerAd = 3): Promise<string[]> {
+    try {
+      const text = await this.fetchRaw(listing.sourceUrl, ["html", "markdown"]);
+      const urls = extractPhotoUrls(text);
+      return urls.slice(0, maxPhotosPerAd);
+    } catch {
+      // A per-ad fetch failure must not sink the whole job: the listing stays
+      // photo-less and vision honestly reports "sin fotos".
+      return [];
+    }
+  }
+
+  /** Firecrawl scrape; returns the concatenated text of the requested formats. */
+  private async fetchRaw(url: string, formats: string[]): Promise<string> {
+    const body = JSON.stringify({ url, formats });
+    const response = await this.throttledPost(body);
     const payload: any = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new Error(`FIRECRAWL_HTTP_${response.status}: ${payload?.error ?? "scrape failed"}`);
     }
-    return String(payload?.data?.markdown ?? "");
+    const d = payload?.data ?? {};
+    return [d.markdown ?? "", d.html ?? ""].join("\n");
+  }
+
+  /**
+   * POST to the Firecrawl /scrape endpoint with client-side throttling and
+   * 429 retry. The free plan is a moving window of 20 req/min; a full job is
+   * ~17 requests, so without pacing the enrichment phase gets rate-limited.
+   * On 429 we honor the server's retry-after hint and retry (up to 5 tries).
+   */
+  private async throttledPost(body: string): Promise<Response> {
+    const endpoint = this.endpoint.replace(/\/$/, "");
+    let lastResponse: Response | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const waitMs = this.minIntervalMs - (Date.now() - this.lastRequestAt);
+      if (waitMs > 0) await sleep(waitMs);
+      this.lastRequestAt = Date.now();
+      const response = await fetch(`${endpoint}/scrape`, {
+        method: "POST",
+        headers: { authorization: "Bearer " + this.apiKey, "content-type": "application/json" },
+        body,
+      });
+      if (response.status !== 429) {
+        lastResponse = response;
+        break;
+      }
+      lastResponse = response;
+      const payload: any = await response.json().catch(() => ({}));
+      const msg = String(payload?.error ?? "");
+      const m = /retry after (\d+)s/i.exec(msg);
+      // Honor the server's hint (always present on 429); exponential fallback.
+      const delayMs = m ? parseInt(m[1], 10) * 1000 : 1000 * (attempt + 1);
+      await sleep(delayMs);
+    }
+    if (lastResponse && lastResponse.status === 429) {
+      throw new Error("FIRECRAWL_HTTP_429: rate limit still exceeded after retries");
+    }
+    return lastResponse!;
   }
 }
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /**
  * Parse coches.net category cards from Firecrawl markdown.
@@ -155,13 +254,13 @@ export function parseCategoryCards(markdown: string, criteria: ScrapeCriteria): 
     const adId = m[3];
     const block = m[4].replace(/\n{2,}/g, "\n");
 
-    // Price: first plausible € amount, preferring one within the cap (the
-    // "Financiado" line can appear with a different amount).
-    const priceMatches = [...block.matchAll(/([\d][\d.]*)\s*€/g)]
-      .map((x) => parseNum(x[1]))
-      .filter((p) => p > 0);
-    const within = priceMatches.find((p) => p <= criteria.maxPrice * 1.5);
-    const price = within ?? (priceMatches[0] > 0 ? priceMatches[0] : 0);
+    // Price: the card's own price line is the FIRST "<digits> €" amount in
+    // the block (e.g. "11.990 €"). Monthly-installment lines ("143,32 €/mes")
+    // and other amounts are stripped so they can never be picked as the price.
+    const blockPrices = block
+      .replace(/[\d.,]+\s*€\s*\/\s*mes/g, "") // financing: X €/mes
+      .match(/^[\d][\d.]*\s*€/gm);
+    const price = blockPrices && blockPrices.length > 0 ? parseNum(blockPrices[0].replace(/€.*$/, "")) : 0;
 
     // Mileage: the card bullet reads e.g. "- 78,915 km" (comma = thousands).
     const kmMatch = block.match(/-?\s*([\d][\d.,]*)\s*km\b/i);
@@ -172,12 +271,10 @@ export function parseCategoryCards(markdown: string, criteria: ScrapeCriteria): 
     const year = yearMatch ? Number(yearMatch[1]) : null;
 
     const fuelMatch = block.match(/-\s*((?:Gasolina|Di[és]el|H[íi]brido|El[ée]ctrico|GLP)[^-\n]*)/i);
-    const photoUrls: string[] = [];
-    for (const p of block.matchAll(/!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/g)) {
-      const u = p[1];
-      // Only real vehicle photos (a.ccdn.es/cnet/vehicles/...); skip icons/logos.
-      if (u.includes("/cnet/vehicles/")) photoUrls.push(u);
-    }
+    // The category page does not carry car photos (galleries are lazy-loaded);
+    // any a.ccdn.es hit is captured here but the real set comes from the
+    // per-ad enrichment (enrichPhotos).
+    const photoUrls = extractPhotoUrls(block);
 
     out.push({
       source: "firecrawl",
