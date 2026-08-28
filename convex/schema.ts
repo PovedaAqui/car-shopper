@@ -25,6 +25,8 @@ export default defineSchema({
       maxPrice: v.number(),
       region: v.string(),
       maxKm: v.optional(v.number()),
+      /** Photos per ad to analyze: 0 = vision deactivated, >=1 = cap (all when omitted in old jobs). */
+      maxPhotos: v.optional(v.number()),
     }),
     status: v.union(
       v.literal("queued"),

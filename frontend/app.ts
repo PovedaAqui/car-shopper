@@ -46,7 +46,11 @@ type LocalSettings = {
   openrouterKey: string;
   firecrawlKey: string;
   useFirecrawl: boolean;
+  /** Photos per ad to analyze: 0 = vision off, >=1 = cap. Default 3. */
+  maxPhotos: number;
 };
+
+export const DEFAULT_MAX_PHOTOS = 3;
 
 function loadSettings(): Partial<LocalSettings> {
   try {
@@ -77,6 +81,7 @@ function setupSettings() {
     if ((event as SubmitEvent).submitter?.id === "settings-close") return;
     event.preventDefault();
     const data = new FormData(form);
+    const maxPhotosRaw = Number(data.get("maxPhotos"));
     const settings: LocalSettings = {
       visionProvider: String(data.get("visionProvider") ?? "vllm"),
       visionBaseUrl: String(data.get("visionBaseUrl") ?? ""),
@@ -84,6 +89,7 @@ function setupSettings() {
       openrouterKey: String(data.get("openrouterKey") ?? ""),
       firecrawlKey: String(data.get("firecrawlKey") ?? ""),
       useFirecrawl: data.get("useFirecrawl") === "on",
+      maxPhotos: Number.isInteger(maxPhotosRaw) && maxPhotosRaw >= 0 ? maxPhotosRaw : DEFAULT_MAX_PHOTOS,
     };
     sessionStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
     $("settings-status").textContent = "Saved for this browser session.";
@@ -384,12 +390,18 @@ form.addEventListener("submit", async (e) => {
   err.hidden = true;
   const data = new FormData(form);
   const maxKmRaw = (data.get("maxKm") as string)?.trim();
+  const saved = loadSettings();
+  const maxPhotos =
+    typeof saved.maxPhotos === "number" && Number.isInteger(saved.maxPhotos) && saved.maxPhotos >= 0
+      ? saved.maxPhotos
+      : DEFAULT_MAX_PHOTOS;
   const criteria = {
     make: (data.get("make") as string).trim(),
     model: (data.get("model") as string).trim(),
     maxPrice: Number(data.get("maxPrice")),
     region: (data.get("region") as string).trim(),
     ...(maxKmRaw ? { maxKm: Number(maxKmRaw) } : {}),
+    maxPhotos,
   };
   const btn = $("search-btn") as HTMLButtonElement;
   btn.disabled = true;
@@ -398,12 +410,14 @@ form.addEventListener("submit", async (e) => {
     // Production Convex redacts thrown error messages, so the mutation returns
     // a structured rejection ({ code }) for known client-facing cases instead
     // of throwing. Map those codes to friendly messages.
-    if (created && (created.code === "FREE_TIER_EXHAUSTED" || created.code === "PRICE_OUT_OF_RANGE")) {
+    if (created && (created.code === "FREE_TIER_EXHAUSTED" || created.code === "PRICE_OUT_OF_RANGE" || created.code === "PHOTOS_OUT_OF_RANGE")) {
       err.hidden = false;
       err.textContent =
         created.code === "FREE_TIER_EXHAUSTED"
           ? "Your free search for today has already been used. Try again tomorrow."
-          : "Please enter a price between €100 and €1,000,000.";
+          : created.code === "PRICE_OUT_OF_RANGE"
+            ? "Please enter a price between €100 and €1,000,000."
+            : "Photos per ad must be a whole number from 0 upward.";
       return;
     }
     const jobId = typeof created === "string" ? created : created?.jobId;

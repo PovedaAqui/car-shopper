@@ -31,6 +31,8 @@ export interface ClaimedJob {
     maxPrice: number;
     region: string;
     maxKm?: number;
+    /** Photos per ad to analyze: 0 = vision deactivated, >=1 = cap, undefined = all. */
+    maxPhotos?: number;
   };
   requestId?: string;
 }

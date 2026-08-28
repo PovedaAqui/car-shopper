@@ -40,6 +40,8 @@ export interface ScrapeCriteria {
   maxPrice: number;
   region: string;
   maxKm?: number;
+  /** Photos per ad to analyze: 0 = vision deactivated, >=1 = cap, undefined = all. */
+  maxPhotos?: number;
 }
 
 /** Fixture-backed source (the only one shipped in this build). */

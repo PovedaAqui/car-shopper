@@ -25,6 +25,7 @@ export const create = mutation({
       maxPrice: v.number(),
       region: v.string(),
       maxKm: v.optional(v.number()),
+      maxPhotos: v.optional(v.number()),
     }),
   },
   handler: async (ctx, args) => {
@@ -32,6 +33,12 @@ export const create = mutation({
       // Return (not throw): production Convex redacts thrown error messages,
       // so the marker would not reach the client to render a friendly message.
       return { jobId: null, code: "PRICE_OUT_OF_RANGE", status: "rejected" as const };
+    }
+    if (args.criteria.maxPhotos !== undefined) {
+      // 0 = vision deactivated; positive integer = photos per ad cap.
+      if (!Number.isInteger(args.criteria.maxPhotos) || args.criteria.maxPhotos < 0) {
+        return { jobId: null, code: "PHOTOS_OUT_OF_RANGE", status: "rejected" as const };
+      }
     }
     const now = Date.now();
     const dayStart = new Date(now).setUTCHours(0, 0, 0, 0);
@@ -519,8 +526,8 @@ function publicJobView(job: any) {
   };
 }
 
-function hashCriteria(c: { make: string; model: string; maxPrice: number; region: string; maxKm?: number }): string {
-  const s = `${c.make}|${c.model}|${c.maxPrice}|${c.region}|${c.maxKm ?? "any"}`.toLowerCase();
+function hashCriteria(c: { make: string; model: string; maxPrice: number; region: string; maxKm?: number; maxPhotos?: number }): string {
+  const s = `${c.make}|${c.model}|${c.maxPrice}|${c.region}|${c.maxKm ?? "any"}|${c.maxPhotos ?? "def"}`.toLowerCase();
   // FNV-1a (stable across JS engines; not cryptographic).
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {

@@ -71,7 +71,8 @@ function normClean(v: unknown): VisionResult["cleanliness"] {
     : "no_evaluable";
 }
 
-function noEvaluable(adId: string, provider: string, model: string, step: VisionResult["step"], reason: string, photosAnalyzed = 0): VisionResult {
+function noEvaluable(adId: string, provider: string, model: string, step: VisionResult["step"], reason: string, photosAnalyzed = 0, hasPhotos?: boolean): VisionResult {
+  const has = hasPhotos ?? photosAnalyzed > 0;
   return {
     adId,
     provider,
@@ -79,7 +80,7 @@ function noEvaluable(adId: string, provider: string, model: string, step: Vision
     step,
     promptVersion: PROMPT_VERSION,
     photosAnalyzed,
-    photoType: photosAnalyzed === 0 ? "sin_fotos" : undefined,
+    photoType: has ? undefined : "sin_fotos",
     exteriorState: "no_evaluable",
     interiorState: "no_evaluable",
     cleanliness: "no_evaluable",
@@ -93,14 +94,22 @@ function noEvaluable(adId: string, provider: string, model: string, step: Vision
 /**
  * Analyze one car with the local model (single pass).
  * Photos are fetched by the local model (data stays local — local_inference_only).
+ * `maxPhotos` caps how many photos per ad are analyzed: 0 disables vision for
+ * this ad (honest `no_evaluable`), a positive number caps the set, and
+ * undefined analyzes all available photos.
  */
 async function analyzeWithModel(
   cfg: ModelConfig,
   listing: RawListing,
   step: VisionResult["step"],
-  neutral: boolean
+  neutral: boolean,
+  maxPhotos?: number
 ): Promise<VisionResult> {
-  const photos = listing.photoUrls.slice(0, MAX_PHOTOS_PER_CAR);
+  if (maxPhotos === 0) {
+    return noEvaluable(listing.adId, cfg.provider, cfg.model, step, "inspección visual desactivada por configuración", 0, listing.photoUrls.length > 0);
+  }
+  const cap = maxPhotos ?? MAX_PHOTOS_PER_CAR;
+  const photos = listing.photoUrls.slice(0, cap);
   if (photos.length === 0) {
     return noEvaluable(listing.adId, cfg.provider, cfg.model, step, "sin fotos en el anuncio");
   }
@@ -131,7 +140,7 @@ async function analyzeWithModel(
       model: cfg.model,
       step,
       promptVersion: PROMPT_VERSION,
-      photosAnalyzed: Math.min(Number(value.photos_analyzed ?? 0), MAX_PHOTOS_PER_CAR) || photos.length,
+      photosAnalyzed: maxPhotos === 0 ? 0 : Math.min(Number(value.photos_analyzed ?? 0), cap) || photos.length,
       photoType: value.photo_type,
       exteriorState: normState(value.exterior_state, "no_evaluable"),
       interiorState: isSinVer ? "no_evaluable" : normInterior(value.interior_state),
@@ -197,7 +206,8 @@ export async function runVision(
   listings: RawListing[],
   cfg: ModelConfig | null,
   health: Health | null,
-  mode: "local_inference_only" | "local_preferred"
+  mode: "local_inference_only" | "local_preferred",
+  maxPhotos?: number
 ): Promise<VisionOutcome> {
   const { cfg: active, decision } = selectProvider(
     mode,
@@ -223,9 +233,9 @@ export async function runVision(
   const primary: VisionResult[] = [];
   const reverify: VisionResult[] = [];
   for (const l of listings) {
-    primary.push(await analyzeWithModel(active, l, "primary", false));
+    primary.push(await analyzeWithModel(active, l, "primary", false, maxPhotos));
     // Independent reverify pass: different framing, no knowledge of pass 1.
-    reverify.push(await analyzeWithModel(active, l, "reverify", true));
+    reverify.push(await analyzeWithModel(active, l, "reverify", true, maxPhotos));
   }
   return {
     primary,
