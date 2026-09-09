@@ -2,7 +2,7 @@
 
 - **Project:** Car Shopper
 - **Event:** Convex All Gas Hackathon
-- **What it does:** Local-AI car shopping comparison app. Ranks fixture listings by €/km, runs two independent vision passes, produces a ranked HTML report, and can email that report as an HTML body via AgentMail.
+- **What it does:** Local-AI car shopping comparison app. Scrapes coches.net live (no fixed inputs), ranks real listings by €/km, runs two independent vision passes, produces a ranked HTML report, and can email that report as an HTML body via AgentMail.
 - **Live app:** https://glorious-monitor-400.convex.site
 - **Repo:** https://github.com/PovedaAqui/car-shopper
 - **Frontend:** Convex static hosting
@@ -12,7 +12,7 @@
 - **Auth:** none
 - **AI models:** qwen38-27b-unsloth-nvfp4-dflash2 (local vLLM), Ollama/LM Studio adapters
 - **Started:** 2026-08-26T16:25:21Z
-- **Last updated:** 2026-08-28T11:38:01Z
+- **Last updated:** 2026-09-09T08:30:00Z
 
 ## Log
 
@@ -60,3 +60,9 @@ Ran the end-to-end acceptance flow on the public URL: browser search → Convex 
 
 ### 2026-08-28 - friendly error fix
 Discovered during production verification that Convex redacts thrown error messages on production deployments (the client receives a generic "Server Error" plus a request ID), so thrown markers could never reach the frontend. Changed the `create` mutation to return structured rejections (`code: FREE_TIER_EXHAUSTED` / `PRICE_OUT_OF_RANGE`) instead of throwing, and mapped those codes to user-facing messages in the frontend. Verified live: the second same-day search now shows the friendly "free search already used" message. Typecheck and the 21-test suite pass; backend and frontend redeployed to the same prod deployment.
+
+### 2026-08-28 - remove fixtures, live scrape only
+Removed all fixed inputs from the pipeline: Firecrawl live scrape is now the only source (no fixture fallback). Removed stale fixture-derived copy and pre-filled search criteria from the frontend footer and form defaults so every demo starts from the user's own input. Hardened the provider layer: host-based inference between local vLLM and strict OpenAI-compatible endpoints, Firecrawl request pacing plus bounded 429 retry, per-ad photo enrichment. Added regression tests; the suite passes 38/38. README refined to match the live-only behavior.
+
+### 2026-09-09 - independent production re-verification
+Re-verified the live deployment end-to-end after the fixture removal, in a fresh session: `npm test` (38/38), `npx tsc --noEmit`, and `npm run build` all pass clean; `git status` clean with local HEAD matching `origin/main`; `npx convex function-spec` confirms 26 deployed functions (a real push, not a stale deploy). Ran the local worker against the prod deployment twice with different search criteria — Toyota Yaris (≤€8000, Barcelona) via the public form, and Seat Ibiza (≤€6000, Madrid) via a fresh `userId` through `npx convex run api:create` — both scraped real coches.net listings live (8 and 16 respectively), ranked them, and produced a genuine HTML report served from Convex File Storage. Confirmed the free-tier limit is scoped per `userId`, not global: the second search under the *original* `userId` was correctly rejected with the friendly "free search already used" message, while the fresh `userId` succeeded. Vision remains honestly `no_evaluable` in this environment (text-only local model), as designed. No secrets exposed in the process.
