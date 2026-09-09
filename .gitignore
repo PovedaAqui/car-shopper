@@ -24,3 +24,6 @@ hackathon-keys
 
 # Internal demo runbook — endpoints/commands, never commit or push
 DEMO_RUNBOOK.md
+
+# Internal demo video script — never commit or push
+DEMO_VIDEO_SCRIPT.md
