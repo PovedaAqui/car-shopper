@@ -21,3 +21,6 @@ LOCAL_TO_PRODUCTION_PLAN.md
 # Secrets / credentials — NEVER commit or push
 hackathon-keys
 .env.local
+
+# Internal demo runbook — endpoints/commands, never commit or push
+DEMO_RUNBOOK.md

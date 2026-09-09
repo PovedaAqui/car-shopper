@@ -34,6 +34,13 @@ serves at run time, scraped live, and every vision result comes from a real
 model call. If the live source or the model fails, the job fails or honestly
 reports `no_evaluable` — the pipeline never invents or substitutes data.
 
+## Live deployment
+
+- **App**: https://glorious-monitor-400.convex.site
+- **Convex backend**: https://glorious-monitor-400.convex.cloud
+  (prod, `luis-poveda:car-shopper:main`, region us)
+- **Repo**: https://github.com/PovedaAqui/car-shopper
+
 ## Stack
 
 - **Backend / source of truth**: Convex (schema + collections, public +
@@ -142,6 +149,9 @@ set exposes an unauthenticated write surface. **Always set
 this app publicly.** The README and code call this out deliberately rather
 than hiding it.
 
+The production deployment (`glorious-monitor-400`) has `WORKER_API_KEY` set;
+the dev opt-in is closed there. Confirm with `npx convex env list`.
+
 ## What is intentionally NOT in this build
 
 - **Authentication**: ownership is keyed on a client-supplied `userId` (a UUID
@@ -164,6 +174,25 @@ than hiding it.
 - Report: `worker/state/local_report.html`, source label
   `coches.net (en vivo, scrape 28/08/2026 · madrid)`, top-3 adIds
   70948305 / 70900298 / 71175597
+
+## Verified in production
+
+2026-09-09, worker run against the live `glorious-monitor-400` deployment,
+two independent searches (different criteria, no shared state):
+
+- **Toyota Yaris, ≤ €8000, Barcelona** — submitted through the public form:
+  8 real listings ranked, 0 excluded, completed in ~40s. Free-tier daily
+  limit correctly rejected a second same-day search under the same
+  `userId` with the friendly "free search already used" message (no raw
+  server error).
+- **Seat Ibiza, ≤ €6000, Madrid** — submitted with a fresh `userId` via
+  `npx convex run api:create --prod` (confirms the free-tier limit is
+  scoped per user, not global): 16 real listings ranked, 0 excluded,
+  completed in ~2 min.
+
+Both reports were genuine HTML files served from Convex File Storage;
+vision was honestly `0/N evaluable` in both runs (the configured local
+vLLM model is text-only in this environment, as documented above).
 
 ## Tests
 
