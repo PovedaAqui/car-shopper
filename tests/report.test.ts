@@ -57,4 +57,20 @@ describe("report HTML", () => {
     expect(headerCells).toBe(8);
     expect(firstRowTds).toBe(8);
   });
+
+  it("links the title to the listing's sourceUrl", () => {
+    const html = renderReportHTML({
+      criteria: { make: "Toyota", model: "Yaris", maxPrice: 5000, region: "Barcelona" },
+      listings: [listing],
+      scores: [score],
+      visionPrimary: [],
+      consensus: [],
+      providerLabel: "test",
+      generatedAt: 1,
+      jobStage: "completed",
+    });
+    expect(html).toContain(`<a href="${listing.sourceUrl}" target="_blank" rel="noopener noreferrer">`);
+    // the anchor wraps the escaped title, not the raw script tag
+    expect(html).toMatch(/<a href="https:\/\/example\.test\/1"[^>]*>&lt;script&gt;alert\(1\)&lt;\/script&gt;<\/a>/);
+  });
 });

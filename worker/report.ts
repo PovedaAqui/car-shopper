@@ -78,7 +78,7 @@ export function renderReportHTML(input: ReportInput): string {
       return `<tr>
         <td class="rank">${s.rank}</td>
         <td>${photoHtml}</td>
-        <td class="title">${esc(l.title)}<div class="sub">${esc(l.city ?? "—")} · ${l.year ?? "año n/d"} · ${esc(l.fuel ?? "—")}</div></td>
+        <td class="title"><a href="${esc(l.sourceUrl)}" target="_blank" rel="noopener noreferrer">${esc(l.title)}</a><div class="sub">${esc(l.city ?? "—")} · ${l.year ?? "año n/d"} · ${esc(l.fuel ?? "—")}</div></td>
         <td class="num">€ ${s.pricePerKm.toFixed(2)}/km</td>
         <td class="num">${esc(l.price).replace(".", ",")} €</td>
         <td class="num">${(l.km / 1000).toFixed(0)}k km</td>
@@ -125,6 +125,8 @@ export function renderReportHTML(input: ReportInput): string {
   .thumb-ph { width: 74px; height: 56px; border-radius: 8px; background: #ccc3; align-items: center; justify-content: center; font-size: .7rem; color: #888; }
   .thumb-none { width: 74px; height: 56px; border-radius: 8px; background: #ccc3; display: flex; align-items: center; justify-content: center; font-size: .7rem; color: #888; }
   .title .sub { font-size: .78rem; color: #888; }
+  .title a { color: inherit; text-decoration: none; font-weight: 600; }
+  .title a:hover { text-decoration: underline; }
   .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
   .score { font-weight: 600; }
   .delta { font-size: .75rem; } .delta.pos { color: #16a34a; } .delta.neg { color: #dc2626; }
