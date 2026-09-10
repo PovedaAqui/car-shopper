@@ -209,6 +209,35 @@ happens to answer in — this exists because an OpenAI-compatible model can
 ignore prompt-level enum instructions (see the 2026-09-10 postmortem in
 `hackathon.md`).
 
+## Input validation
+
+`convex/criteria_lib.ts` is a pure, framework-free `validateCriteria()`
+function imported directly by BOTH `convex/api.ts`'s `create` mutation
+(server, authoritative — the only check that actually matters for
+security) and `frontend/app.ts` (client, same import — not a duplicated
+copy that could drift). It:
+
+- requires make/model/region (trimmed, whitespace-collapsed, length-capped
+  at 40/40/60 chars) and restricts them to a safe charset (letters incl.
+  accented, digits, spaces, hyphen, apostrophe, period) — this exists
+  because `worker/scrape.ts`'s `categoryUrl` splices make/model directly
+  into the coches.net scrape URL; an unrestricted value like
+  `"Toyota/../etc"` could reshape the URL's path. `categoryUrl` also
+  `encodeURIComponent()`s defensively as a second layer.
+- requires `maxPrice` in `100..1,000,000`.
+- treats the optional `maxKm`/`minYear`/`maxPhotos` as "not provided" when
+  blank, and validates them as in-range integers when present.
+- never throws — every rejection is a structured `{ code, field, message }`,
+  which matters because production Convex redacts thrown error messages
+  (see "friendly error fix" below); the frontend maps each code to a
+  specific, actionable message and marks the offending field invalid via
+  `setCustomValidity()`.
+
+`convex/email.ts`'s `requestEmail` follows the same structured-rejection
+pattern for `CONFIRM_REQUIRED`/`INVALID_EMAIL`/`NOT_FOUND`/
+`REPORT_NOT_READY`, and the frontend's email form pre-validates the address
+format client-side before the round trip.
+
 ## What is intentionally NOT in this build
 
 - **Authentication**: ownership is keyed on a client-supplied `userId` (a UUID
@@ -301,6 +330,21 @@ browser tool plus fresh `userId`s via the CLI:
   confirming the limit persists correctly across page navigations within
   one browser session.
 
+2026-09-11, after adding the shared `validateCriteria` and structured
+rejections (input validation hardening):
+
+- `npx convex run api:create` with a path-traversal-style make
+  (`"Toyota/../etc"`) → correctly rejected with `MAKE_INVALID_CHARS`, no
+  job created, no free-tier credit consumed.
+- Empty region → `REGION_REQUIRED`. Out-of-range price (9,999,999) →
+  `PRICE_OUT_OF_RANGE`. Out-of-range `minYear` (1900) → `YEAR_OUT_OF_RANGE`.
+- A search using legitimate accented/punctuated values (`"Citroën"` /
+  `"DS 3"` / region `"Zaragoza"`) was correctly **accepted** (confirming the
+  charset restriction doesn't block real car names), ran end-to-end (19
+  real coches.net listings scraped and ranked), and produced a genuine
+  report titled "Citroën DS 3 ≤ €5500" with the accent preserved correctly
+  throughout.
+
 Both reports were genuine HTML files served from Convex File Storage;
 vision was honestly `0/N evaluable` in the 2026-09-09 runs (the configured
 local vLLM model is text-only in this environment, as documented above) and
@@ -309,13 +353,16 @@ now the default vision provider).
 
 ## Tests
 
-`npm test` runs the Vitest suite (57 tests, all green, 9 files): live
+`npm test` runs the Vitest suite (73 tests, all green, 10 files): live
 Firecrawl card parsing (incl. `€/mes` financing-line handling, photo host
-filtering, pagination, 429 retry, request pacing, `minYear` filtering),
-normalize/dedup on synthetic live-card rows, deterministic scoring, provider
-selection + health/auth header + vLLM-vs-OpenAI body compatibility,
-`maxPhotos` vision behavior against a mock OpenAI-compatible server
-(including `photo_type` normalization for out-of-enum model responses),
-consensus resolution, report rendering, the pipeline end-to-end with a
-stubbed Convex client, and the email helpers (normalization, validation,
-hashing, HTML→text, idempotency keys).
+filtering, pagination, 429 retry, request pacing, `minYear` filtering,
+defensive URL-encoding), normalize/dedup on synthetic live-card rows,
+deterministic scoring, provider selection + health/auth header +
+vLLM-vs-OpenAI body compatibility, `maxPhotos` vision behavior against a
+mock OpenAI-compatible server (including `photo_type` normalization for
+out-of-enum model responses), consensus resolution, report rendering, the
+pipeline end-to-end with a stubbed Convex client, the email helpers
+(normalization, validation, hashing, HTML→text, idempotency keys), and the
+shared search-criteria validator (required-field rejection, length caps,
+exact boundary values, blank-vs-invalid distinction, unsafe-character
+rejection alongside legitimate-punctuation acceptance).

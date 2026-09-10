@@ -12,7 +12,7 @@
 - **Auth:** none
 - **AI models:** qwen38-27b-unsloth-nvfp4-dflash2 (local vLLM), Ollama/LM Studio adapters
 - **Started:** 2026-08-26T16:25:21Z
-- **Last updated:** 2026-09-11T00:15:00Z
+- **Last updated:** 2026-09-11T00:45:00Z
 
 ## Log
 
@@ -200,3 +200,64 @@ new Configuration/Quick start sections describing the in-Convex runtime,
 a note marking `convex/http.ts`'s worker routes as legacy/inert),
 `.env.example` (header clarifies these vars are for `--local` dev only;
 production sets the same names via `npx convex env set`), and this file.
+
+### 2026-09-11 - shared validator, structured rejections (error-proofing the UI)
+
+Extracted `convex/criteria_lib.ts`: a pure, framework-free `validateCriteria()`
+imported directly by BOTH `convex/api.ts`'s `create` mutation (server,
+authoritative) and `frontend/app.ts` (client, imported directly — not
+duplicated logic that could drift). Rejects/normalizes make/model/region
+(required, trimmed, whitespace-collapsed, length-capped, safe charset only),
+maxPrice (100..1,000,000), and the optional maxKm/minYear/maxPhotos
+(blank = not provided, present = validated as an in-range integer). Every
+rejection returns a structured `{ code, field, message }`, never a thrown
+error.
+
+Real bug found while writing this: `make`/`model` were spliced into the
+coches.net scrape URL (`worker/scrape.ts` `categoryUrl`) with no charset
+restriction or encoding — a value like `"Toyota/../etc"` or `"Yaris?x=1"`
+could reshape the URL's path/query. Fixed in two layers: `validateCriteria`
+now rejects URL-structural characters before a job is ever created
+(`MAKE_INVALID_CHARS`/`MODEL_INVALID_CHARS`/`REGION_INVALID_CHARS`), and
+`categoryUrl` additionally `encodeURIComponent()`s make/model defensively
+for any caller that bypasses validation (`--local` dev, tests).
+
+`convex/email.ts`'s `requestEmail` was also switched from throwing
+(`CONFIRM_REQUIRED`/`INVALID_EMAIL`/`NOT_FOUND`/`REPORT_NOT_READY` —
+previously arrived at the client as a generic redacted "Server Error", the
+same production-redaction problem the 2026-08-28 "friendly error fix"
+already solved for `api.create`) to the same structured-rejection pattern.
+
+`frontend/app.ts`: the search form now pre-validates with the imported
+`validateCriteria` before ever calling the mutation (instant, specific,
+per-field message via `setCustomValidity`/`reportValidity`, no round trip
+for the common case), with the full server error-code map kept as
+defense-in-depth for a stale/bypassed client. The email form gained a
+client-side `isLikelyEmail()` pre-check (mirrors `email_lib.ts`'s
+`isValidEmail`, duplicated rather than imported so the bundle stays
+framework-free) plus the new structured error-code map.
+`frontend/index.html` gained `pattern`/`title`/`step`/`max` attributes
+matching the validator's rules, for instant native browser feedback ahead
+of the JS layer.
+
+Added `tests/criteria.test.ts` (15 cases: required-field rejection, length
+caps, exact boundary values for price/km/year/photos, blank-vs-invalid
+distinction for optional fields, unsafe-character rejection alongside
+legitimate-punctuation acceptance like "Citroën"/"L'Aquila") and a
+regression case in `tests/scrape.test.ts` for `categoryUrl`'s defensive
+encoding. Confirmed via `grep` that the esbuild frontend bundle does not
+pull in any server-only Convex code from `criteria_lib.ts` (zero matches
+for `internalMutation`/`internalQuery`/`ctx.db`/`_generated/server`).
+73/73 tests passing (16 new), `tsc --noEmit` clean, `npm run build` clean.
+
+Deployed to production (`npx convex deploy` + `npx @convex-dev/static-hosting
+deploy`) and verified live against `glorious-monitor-400`: `npx convex run
+api:create` with a path-traversal-style make (`"Toyota/../etc"`) was
+correctly rejected with `MAKE_INVALID_CHARS`, no job created, no free-tier
+credit consumed; an empty region was rejected with `REGION_REQUIRED`; an
+out-of-range price with `PRICE_OUT_OF_RANGE`; an out-of-range `minYear`
+with `YEAR_OUT_OF_RANGE`. A search using legitimate accented/punctuated
+values (`"Citroën"` / `"DS 3"` / region `"Zaragoza"`) was correctly
+accepted, ran end-to-end (19 real coches.net listings scraped and ranked),
+and produced a genuine report titled "Citroën DS 3 ≤ €5500" — confirming
+the new charset restriction doesn't block real car names/regions.
