@@ -165,6 +165,47 @@ describe("runVision maxPhotos", () => {
     }
   });
 
+  it("normalizes an English photo_type (e.g. 'professional') back to the Spanish enum, regression for a real prod failure", async () => {
+    const server = http.createServer((req, res) => {
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      req.on("end", () => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    photos_analyzed: 1,
+                    photo_type: "professional", // model ignored the Spanish-enum instruction
+                    exterior_state: "bien",
+                    interior_state: "no_ver",
+                    cleanliness: "limpio",
+                    color: "red",
+                    red_flags: [],
+                  }),
+                },
+                finish_reason: "stop",
+              },
+            ],
+            usage: { prompt_tokens: 5, completion_tokens: 5 },
+          })
+        );
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const port = (server.address() as any).port;
+    try {
+      const out = await runVision([listing("a1", PHOTOS)], mockCfg(port), healthy, "local_inference_only", 1);
+      // Must be a valid Spanish enum value (Convex's schema validator would
+      // reject "professional" outright and fail the whole job).
+      expect(out.primary[0].photoType).toBe("profesional");
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
   it("routes to the OpenAI cloud fallback when local is text-only and mode=local_preferred", async () => {
     const server = await startServer(3);
     let seenAuth: string | null = null;

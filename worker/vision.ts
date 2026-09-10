@@ -80,6 +80,30 @@ function normClean(v: unknown): VisionResult["cleanliness"] {
     : "no_evaluable";
 }
 
+/**
+ * photo_type has no safe fallback value (undefined means "not set" and is
+ * valid), so normalize rather than default to no_evaluable. Maps common
+ * English variants back to the fixed Spanish enum in case a model ignores
+ * the schema instruction (observed live with gpt-4o-mini returning
+ * "professional" instead of "profesional" — Convex's schema validator
+ * rejects anything outside the enum, failing the whole job).
+ */
+const PHOTO_TYPE_EN_TO_ES: Record<string, VisionResult["photoType"]> = {
+  professional: "profesional",
+  amateur: "amateur",
+  no_photos: "sin_fotos",
+  suspect_stock: "stock_sospechoso",
+  stock_photos: "stock_sospechoso",
+};
+function normPhotoType(v: unknown): VisionResult["photoType"] {
+  if (v == null) return undefined;
+  const s = String(v).toLowerCase();
+  if ((["profesional", "amateur", "sin_fotos", "stock_sospechoso"] as const).includes(s as any)) {
+    return s as VisionResult["photoType"];
+  }
+  return PHOTO_TYPE_EN_TO_ES[s] ?? undefined;
+}
+
 function noEvaluable(adId: string, provider: string, model: string, step: VisionResult["step"], reason: string, photosAnalyzed = 0, hasPhotos?: boolean): VisionResult {
   const has = hasPhotos ?? photosAnalyzed > 0;
   return {
@@ -126,7 +150,8 @@ async function analyzeWithModel(
   const system =
     "You are a used-car inspector. Analyze the ad's photos and respond with strict JSON. " +
     "Do not invent anything you cannot see: if something is not visible, use 'no_evaluable'. " +
-    "Write all free-text fields (exterior_details, red_flags) in English. " +
+    "The fields photo_type, exterior_state, interior_state, and cleanliness MUST use exactly one of the Spanish enum values given in the schema (e.g. 'bien', 'regular', 'mal', 'no_evaluable', 'profesional', 'amateur', 'sin_fotos', 'stock_sospechoso', 'limpio', 'descuidado', 'sin_ver') — never translate or invent other values for those fields. " +
+    "Only exterior_details and red_flags are free text: write those two fields in English. " +
     (neutral
       ? "Work independently: you have no knowledge of any other analysis of this ad."
       : "");
@@ -151,7 +176,7 @@ async function analyzeWithModel(
       step,
       promptVersion: PROMPT_VERSION,
       photosAnalyzed: maxPhotos === 0 ? 0 : Math.min(Number(value.photos_analyzed ?? 0), cap) || photos.length,
-      photoType: value.photo_type,
+      photoType: normPhotoType(value.photo_type),
       exteriorState: normState(value.exterior_state, "no_evaluable"),
       interiorState: isSinVer ? "no_evaluable" : normInterior(value.interior_state),
       cleanliness: normClean(value.cleanliness),
