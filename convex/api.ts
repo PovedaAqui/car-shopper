@@ -78,13 +78,21 @@ export const create = mutation({
       return { jobId: existing[0]._id, requestId: existing[0].requestId ?? requestId, status: existing[0].status };
     }
 
+    // The pipeline now runs INSIDE Convex as a scheduled Node action
+    // (convex/pipelineAction.ts) instead of an external polling worker — the
+    // job is "claimed" by that action immediately, using the same
+    // workerToken contract the HTTP worker API (convex/http.ts) already
+    // enforces, so insertListings/insertScores/etc. don't need any changes.
+    const token = `convex-action:${now}:${Math.random().toString(36).slice(2)}`;
     const jobId = await ctx.db.insert("jobs", {
       userId: args.userId,
       idempotencyKey,
       criteria: args.criteria,
-      status: "queued",
-      stage: "queued",
-      progress: 0,
+      status: "claimed",
+      stage: "scraping",
+      progress: 2,
+      workerToken: token,
+      claimedAt: now,
       counts: {
         scraped: 0,
         valid: 0,
@@ -103,7 +111,9 @@ export const create = mutation({
       await ctx.db.patch("credits", credit._id, { consumedByJobId: jobId });
     }
 
-    return { jobId, requestId, status: "queued" as const };
+    await ctx.scheduler.runAfter(0, internal.pipelineAction.run, { jobId, token });
+
+    return { jobId, requestId, status: "claimed" as const };
   },
 });
 
@@ -233,6 +243,14 @@ export const byStatus = internalQuery({
       .query("jobs")
       .withIndex("by_status", (q) => q.eq("status", status as any))
       .collect();
+  },
+});
+
+/** Read-only helper for pipelineAction.ts (the in-Convex pipeline runner). */
+export const getJobForAction = internalQuery({
+  args: { jobId: v.id("jobs") },
+  handler: async (ctx, { jobId }) => {
+    return await ctx.db.get("jobs", jobId);
   },
 });
 

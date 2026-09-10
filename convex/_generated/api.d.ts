@@ -15,6 +15,7 @@ import type * as email_lib from "../email_lib.js";
 import type * as email_send from "../email_send.js";
 import type * as http from "../http.js";
 import type * as maintenance from "../maintenance.js";
+import type * as pipelineAction from "../pipelineAction.js";
 import type * as worker from "../worker.js";
 
 import type {
@@ -31,6 +32,7 @@ declare const fullApi: ApiFromModules<{
   email_send: typeof email_send;
   http: typeof http;
   maintenance: typeof maintenance;
+  pipelineAction: typeof pipelineAction;
   worker: typeof worker;
 }>;
 
