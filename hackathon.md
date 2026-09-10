@@ -12,7 +12,7 @@
 - **Auth:** none
 - **AI models:** qwen38-27b-unsloth-nvfp4-dflash2 (local vLLM), Ollama/LM Studio adapters
 - **Started:** 2026-08-26T16:25:21Z
-- **Last updated:** 2026-09-10T23:45:00Z
+- **Last updated:** 2026-09-11T00:15:00Z
 
 ## Log
 
@@ -164,3 +164,39 @@ was not touched, only how it's invoked); `tsc --noEmit` clean in both the
 root and `convex/` tsconfigs. `worker/index.ts`/`worker/convex_client.ts`
 are now dead code for production (kept only for `--local` one-shot dev runs
 against a self-hosted Convex instance).
+
+### 2026-09-10 (continued) - two complete user-workflow verifications post-migration
+
+Ran two full "act as a real user" passes against the public site after the
+in-Convex migration, to make sure moving the pipeline runner didn't quietly
+break anything a judge would encounter.
+
+Pass 1 (browser tool, existing session/userId): confirmed the public page
+loads with no login; an empty-form submit is blocked by native HTML5
+validation (no spurious job); a valid submission from a `userId` that
+already used today's free search correctly shows the friendly
+"already used" message instead of a raw error; clicking a completed search
+in history renders the realtime status view (progress, counts, ranking
+table) correctly for a job that finished earlier; opening the full report
+shows real coches.net listings with clickable title links, visual-inspection
+badges, and an exclusion table with a reason; the email form's required
+confirmation checkbox is present.
+
+Pass 2 (fresh `userId` via CLI + browser): `npx convex run api:create` for
+a brand-new Ford Focus / Bilbao / `minYear: 2012` search returned
+`status: "claimed"` immediately (the scheduled action fired without
+polling), completed in well under 15 seconds, and produced a report where
+both ranked listings were 2012-or-newer (the `minYear` filter held on a
+second, independent dataset) and a car with no fetched photos was honestly
+labeled "no photos" / "not evaluable" rather than something being invented.
+Also drove the public browser form with a different search (Opel Corsa,
+Zaragoza) from the same browser session — correctly blocked by the
+same-day free-tier limit, confirming the limit is enforced consistently
+across both entry points (CLI mutation and browser form) and persists
+correctly across in-session navigation.
+
+No regressions found. Updated README.md ("Verified in production" section,
+new Configuration/Quick start sections describing the in-Convex runtime,
+a note marking `convex/http.ts`'s worker routes as legacy/inert),
+`.env.example` (header clarifies these vars are for `--local` dev only;
+production sets the same names via `npx convex env set`), and this file.

@@ -93,14 +93,19 @@ hackathon.md       Hackathon build log (Event: Convex All Gas Hackathon)
 ```bash
 npm install
 npx convex dev          # login + push schema/functions + watch
-npm run worker          # run the local worker (polls the deployment for jobs)
 npm run build           # typecheck + build static frontend to dist/
 npm test                # unit tests (vitest)
 
-# One-shot live job without Convex (criteria from env, report to worker/state/):
+# One-shot live job without Convex scheduling (criteria from env, report to
+# worker/state/) — useful for local dev/debugging the pipeline in isolation:
 LOCAL_MAKE=Peugeot LOCAL_MODEL=208 LOCAL_MAX_PRICE=7000 LOCAL_REGION=Madrid \
   npm run worker -- --local
 ```
+
+In production, jobs are NOT run by `npm run worker` — creating a job via
+`api.create` (from the frontend form or `npx convex run api:create`)
+automatically schedules `convex/pipelineAction.ts` inside the deployment.
+There is nothing to start or keep running for a real search to work.
 
 For a real email send, set the AgentMail vars on the deployment (see
 Configuration below); without `AGENTMAIL_API_KEY` a send is recorded `failed`
@@ -108,21 +113,21 @@ with `AGENTMAIL_NOT_CONFIGURED`.
 
 ## Configuration
 
-All secrets/env vars come from the environment or `npx convex env` — **never
-from the repo**. `.env.local` / `.env.worker` are git-ignored.
+All secrets/env vars come from `npx convex env set` (production) or the
+process environment (local `--local` dev only) — **never from the repo**.
+`.env.local` / `.env.worker` are git-ignored and only matter for local dev;
+the in-Convex pipeline action reads everything from the deployment's own
+environment.
 
-### Worker
+### Pipeline environment (Convex deployment env in production)
 
 | Var | Default | Meaning |
 |---|---|---|
-| `CONVEX_URL` | from `convex.json` | Deployment the worker polls/writes to |
-| `CONVEX_SITE_URL` | derived | Base URL of the `convex.site` deployment (worker + worker API) |
-| `WORKER_API_KEY` | — | Shared secret for worker HTTP writes (set via `npx convex env`) |
-| `MODEL_BASE_URL` | `http://localhost:8000/v1` | Local OpenAI-compatible endpoint (extraction + vision default) |
+| `MODEL_BASE_URL` | `http://localhost:8000/v1` | Local OpenAI-compatible endpoint (extraction + vision default) — only reachable from `--local` dev, NOT from the in-Convex action |
 | `MODEL_NAME` | `qwen38-27b-unsloth-nvfp4-dflash2` | Served model id |
 | `VISION_MODE` | `local_inference_only` | Governs whether the **secondary** vision provider may be used when the primary is unhealthy/non-vision: `local_inference_only` / `local_preferred`. Does not gate the primary provider itself. |
 | `MODEL_IS_VISION` | `0` | Set to `1` only when the local model (used for vision if `VISION_PROVIDER=local`) accepts images |
-| `VISION_PROVIDER` | `openai` | Which config is the **primary** vision provider: `openai` (default) or `local`. The other becomes the optional secondary, only used per `VISION_MODE` above. |
+| `VISION_PROVIDER` | `openai` | Which config is the **primary** vision provider: `openai` (default) or `local`. The other becomes the optional secondary, only used per `VISION_MODE` above. In production, `local` cannot reach a real endpoint (the action runs inside Convex, not on a machine with local network access) — keep `openai` in production. |
 | `VISION_PRIMARY_BASE_URL` | `MODEL_BASE_URL` | Local vision endpoint override — used when `VISION_PROVIDER=local` |
 | `VISION_PRIMARY_MODEL` | `MODEL_NAME` | Local vision model identifier — used when `VISION_PROVIDER=local` |
 | `VISION_PRIMARY_PROVIDER` | inferred from host | Explicit provider kind (`vllm` / `openai_compat` / `ollama` / `lmstudio`) for the local vision config |
@@ -140,7 +145,21 @@ from the repo**. `.env.local` / `.env.worker` are git-ignored.
 | `AGENTMAIL_INBOX_ID` | created on first send | Optional existing AgentMail inbox |
 | `AGENTMAIL_WEBHOOK_SECRET` | unset | Optional; bounce webhook at `/api/agentmail/webhook` |
 
-`--local` one-shot criteria: `LOCAL_MAKE` (Toyota), `LOCAL_MODEL` (Yaris),
+Set these in production with, e.g.:
+
+```bash
+npx convex env set FIRECRAWL_API_KEY '<value>'
+npx convex env set OPENAI_API_KEY '<value>'
+npx convex env set OPENAI_VISION_MODEL gpt-4o-mini
+npx convex env set OPENAI_TEXT_MODEL gpt-4o-mini
+npx convex env set VISION_PROVIDER openai
+npx convex env set TEXT_PROVIDER openai
+npx convex env set VISION_MODE local_inference_only
+npx convex env set VISION_MAX_PHOTOS_PER_CAR 1
+```
+
+`--local` one-shot criteria (dev only, reads from `.env.worker` / shell env,
+not from Convex): `LOCAL_MAKE` (Toyota), `LOCAL_MODEL` (Yaris),
 `LOCAL_MAX_PRICE` (5000), `LOCAL_REGION` (Barcelona), `LOCAL_MIN_YEAR`
 (unset = no year filter). No other hardcoded criteria exist in the codebase.
 
@@ -152,22 +171,17 @@ window, so the client **paces** requests (`FIRECRAWL_MIN_INTERVAL_MS`, default
 3.5 s) and **retries 429s** honoring the server's `retry after Ns` hint
 (bounded to 3 attempts, then the job fails loudly with `FIRECRAWL_HTTP_429`).
 
-### Worker auth — read before deploying to a public `convex.site`
+### Legacy HTTP worker API (`convex/http.ts`) — kept for `--local` dev only
 
-The worker writes through an authenticated HTTP API (`convex/http.ts`).
-When `WORKER_API_KEY` is set on the deployment, every write requires the
-shared secret plus a per-job `workerToken` issued at claim time.
-
-**Development caveat:** if `WORKER_API_KEY` is *not* set on the deployment, the
-API accepts requests that send the `x-worker-mode: dev` header so the pipeline
-can be exercised locally. That means a **public** deployment without the key
-set exposes an unauthenticated write surface. **Always set
-`WORKER_API_KEY` via `npx convex env set WORKER_API_KEY …` before exposing
-this app publicly.** The README and code call this out deliberately rather
-than hiding it.
-
-The production deployment (`glorious-monitor-400`) has `WORKER_API_KEY` set;
-the dev opt-in is closed there. Confirm with `npx convex env list`.
+Production no longer uses this: `convex/pipelineAction.ts` calls the same
+internal mutations directly via `ctx.runMutation`/`ctx.runQuery`, with no
+HTTP hop and no `WORKER_API_KEY` needed. The `/api/worker/*` routes in
+`convex/http.ts` still exist and are still reachable, but nothing in the
+production path calls them anymore — they're inert unless something
+external (e.g. a manual `--local`-style external worker) is pointed at them.
+`WORKER_API_KEY` is still set on the production deployment as
+defense-in-depth (closes the `x-worker-mode: dev` opt-in on those routes),
+but it is not required for normal operation anymore.
 
 ## Optional search filters
 
@@ -262,6 +276,30 @@ depends on any process running on a laptop, VPS, or any other host:
   its own, 26 real coches.net listings ranked, report served from Convex
   File Storage. Confirmed via the public browser form too: submission
   correctly enforced the daily free-tier limit for an already-used `userId`.
+
+2026-09-10 (complete end-to-end user-workflow tests, twice, after the
+in-Convex migration), simulating a real user from the public site with the
+browser tool plus fresh `userId`s via the CLI:
+
+- Round 1 (Renault Clio submission, ≤ €7500, Valencia): empty-form submit
+  correctly blocked by native HTML5 required-field validation (no spurious
+  job created); valid submission from an already-used `userId` correctly
+  showed "Your free search for today has already been used. Try again
+  tomorrow."; clicked into search history → realtime status view (progress
+  bar, counts, ranking table) rendered correctly for a prior completed job;
+  opened the full report — real coches.net listings, clickable title links,
+  visual-inspection badges, email form with required confirmation checkbox
+  all present and correct.
+- Round 2 (fresh `userId`, Ford Focus ≤ €6000, Bilbao, `minYear: 2012`):
+  `npx convex run api:create` returned `status: "claimed"` immediately; job
+  completed in under 15s; report correctly showed "2012+" in the meta line
+  and both ranked listings were 2012/2013 (no listing below the cutoff, none
+  incorrectly dropped); one listing had no photos and was honestly marked
+  "no photos" / "not evaluable" rather than invented. Also tried the browser
+  form with a second, different search (Opel Corsa) — correctly rejected by
+  the same-day free-tier limit for that browser's persisted `userId`,
+  confirming the limit persists correctly across page navigations within
+  one browser session.
 
 Both reports were genuine HTML files served from Convex File Storage;
 vision was honestly `0/N evaluable` in the 2026-09-09 runs (the configured
