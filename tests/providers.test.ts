@@ -1,9 +1,37 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import http from "node:http";
-import { tryParseJson, selectProvider, checkHealth, chat, providerFor } from "../worker/providers.ts";
+import { tryParseJson, selectProvider, checkHealth, chat, providerFor, defaultModels } from "../worker/providers.ts";
 import type { ModelConfig } from "../worker/providers.ts";
 
+const VISION_ENV_KEYS = [
+  "VISION_PROVIDER",
+  "OPENAI_API_KEY",
+  "OPENAI_VISION_MODEL",
+  "OPENAI_BASE_URL",
+  "MODEL_BASE_URL",
+  "MODEL_NAME",
+  "MODEL_IS_VISION",
+  "VISION_PRIMARY_BASE_URL",
+  "VISION_PRIMARY_MODEL",
+  "VISION_PRIMARY_PROVIDER",
+];
+let savedEnv: Record<string, string | undefined>;
+
 describe("providers", () => {
+  beforeEach(() => {
+    savedEnv = {};
+    for (const k of VISION_ENV_KEYS) {
+      savedEnv[k] = process.env[k];
+      delete process.env[k];
+    }
+  });
+  afterEach(() => {
+    for (const k of VISION_ENV_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k];
+    }
+  });
+
   it("parses fenced JSON", () => {
     expect(tryParseJson<{ a: number }>("```json\n{\"a\":1}\n```")).toEqual({ a: 1 });
   });
@@ -134,5 +162,30 @@ describe("providers", () => {
     } finally {
       await new Promise<void>((r) => server.close(() => r()));
     }
+  });
+
+  it("defaultModels: OpenAI is primary by default when OPENAI_API_KEY is set", () => {
+    process.env.OPENAI_API_KEY = "sk-test";
+    const { visionPrimary, visionFallback } = defaultModels();
+    expect(visionPrimary.provider).toBe("openai_compat");
+    expect(visionPrimary.model).toBe("gpt-4o-mini");
+    expect(visionPrimary.visionCapable).toBe(true);
+    expect(visionFallback?.provider).toBe("vllm"); // local becomes the secondary
+  });
+
+  it("defaultModels: degrades to local as primary when OPENAI_API_KEY is unset (no VISION_PROVIDER override)", () => {
+    const { visionPrimary, visionFallback } = defaultModels();
+    expect(visionPrimary.provider).toBe("vllm");
+    expect(visionFallback).toBeNull(); // nothing to fall back to without a key
+  });
+
+  it("defaultModels: VISION_PROVIDER=local makes local primary even with a valid OPENAI_API_KEY", () => {
+    process.env.OPENAI_API_KEY = "sk-test";
+    process.env.VISION_PROVIDER = "local";
+    process.env.MODEL_IS_VISION = "1";
+    const { visionPrimary, visionFallback } = defaultModels();
+    expect(visionPrimary.provider).toBe("vllm");
+    expect(visionPrimary.visionCapable).toBe(true);
+    expect(visionFallback?.provider).toBe("openai_compat"); // openai becomes the secondary
   });
 });

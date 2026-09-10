@@ -8,10 +8,15 @@
  * available or cannot produce schema-valid output, the result is
  * `no_evaluable` — never invented.
  *
- * Backend: local OpenAI-compatible endpoint (vLLM default), Ollama, LM Studio
- * via the provider abstraction (health-gated). There is no fixture fallback:
- * vision results always come from a real model call or are honestly marked
- * `no_evaluable` with the reason.
+ * Provider selection: OpenAI is the DEFAULT vision provider
+ * (VISION_PROVIDER=openai, the default, requires OPENAI_API_KEY). Set
+ * VISION_PROVIDER=local to use the local OpenAI-compatible endpoint (vLLM,
+ * Ollama, LM Studio) instead — health-gated, and requires MODEL_IS_VISION=1
+ * on a genuinely vision-capable served model. Whichever one is primary, the
+ * other becomes an optional secondary provider only reachable when
+ * VISION_MODE=local_preferred is explicitly set. There is no fixture
+ * fallback: vision results always come from a real model call or are
+ * honestly marked `no_evaluable` with the reason.
  */
 
 import type { ModelConfig, Health } from "./providers.ts";

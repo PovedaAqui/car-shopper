@@ -110,15 +110,16 @@ from the repo**. `.env.local` / `.env.worker` are git-ignored.
 | `WORKER_API_KEY` | — | Shared secret for worker HTTP writes (set via `npx convex env`) |
 | `MODEL_BASE_URL` | `http://localhost:8000/v1` | Local OpenAI-compatible endpoint (extraction + vision default) |
 | `MODEL_NAME` | `qwen38-27b-unsloth-nvfp4-dflash2` | Served model id |
-| `VISION_MODE` | `local_inference_only` | `local_inference_only` / `local_preferred` |
-| `MODEL_IS_VISION` | `0` | Set to `1` only when the configured vision model accepts images |
-| `VISION_PRIMARY_BASE_URL` | `MODEL_BASE_URL` | Vision endpoint override — local **or** remote OpenAI-compatible (e.g. `https://api.openai.com/v1`) |
-| `VISION_PRIMARY_MODEL` | `MODEL_NAME` | Vision model identifier |
-| `VISION_PRIMARY_PROVIDER` | inferred from host | Explicit provider kind (`vllm` / `openai_compat` / `ollama` / `lmstudio`) |
-| `VISION_PRIMARY_API_KEY` | unset | Runtime key for the vision endpoint when it needs one (e.g. a remote OpenAI-compatible API) |
-| `OPENAI_API_KEY` | unset | Enables the optional cloud vision **fallback** — only used when `VISION_MODE=local_preferred` and the local model is down or not vision-capable; never contacted in `local_inference_only` |
-| `OPENAI_VISION_MODEL` | `gpt-4o-mini` | Model id for the OpenAI vision fallback |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Override for an OpenAI-compatible fallback endpoint |
+| `VISION_MODE` | `local_inference_only` | Governs whether the **secondary** vision provider may be used when the primary is unhealthy/non-vision: `local_inference_only` / `local_preferred`. Does not gate the primary provider itself. |
+| `MODEL_IS_VISION` | `0` | Set to `1` only when the local model (used for vision if `VISION_PROVIDER=local`) accepts images |
+| `VISION_PROVIDER` | `openai` | Which config is the **primary** vision provider: `openai` (default) or `local`. The other becomes the optional secondary, only used per `VISION_MODE` above. |
+| `VISION_PRIMARY_BASE_URL` | `MODEL_BASE_URL` | Local vision endpoint override — used when `VISION_PROVIDER=local` |
+| `VISION_PRIMARY_MODEL` | `MODEL_NAME` | Local vision model identifier — used when `VISION_PROVIDER=local` |
+| `VISION_PRIMARY_PROVIDER` | inferred from host | Explicit provider kind (`vllm` / `openai_compat` / `ollama` / `lmstudio`) for the local vision config |
+| `VISION_PRIMARY_API_KEY` | unset | Runtime key for the local vision endpoint when it needs one |
+| `OPENAI_API_KEY` | unset | **Required for the default vision provider.** Without it, vision silently degrades to the local config as primary (still honest `no_evaluable` if that's also not vision-capable) |
+| `OPENAI_VISION_MODEL` | `gpt-4o-mini` | Model id for OpenAI vision |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Override for an OpenAI-compatible vision endpoint |
 | `FIRECRAWL_API_KEY` | unset | **Required** — Firecrawl runtime key used to scrape coches.net live; never commit it |
 | `FIRECRAWL_BASE_URL` | `https://api.firecrawl.dev/v1` | Optional Firecrawl-compatible endpoint |
 | `FIRECRAWL_MIN_INTERVAL_MS` | `3500` | Client-side pacing between Firecrawl requests (free plan: 20 req/min) |

@@ -117,39 +117,63 @@ export function defaultModels(): {
 } {
   const base = process.env.MODEL_BASE_URL ?? "http://localhost:8000/v1";
   const model = process.env.MODEL_NAME ?? "qwen38-27b-unsloth-nvfp4-dflash2";
-  const vBase = process.env.VISION_PRIMARY_BASE_URL ?? base;
-  const vModel = process.env.VISION_PRIMARY_MODEL ?? model;
+  const extraction: ModelConfig = {
+    provider: providerFor(base, process.env.MODEL_PROVIDER),
+    baseUrl: base,
+    model,
+    temperature: 0,
+    maxTokens: 2048,
+    disableThinking: true,
+    visionCapable: false,
+  };
+
+  const localVision = buildLocalVisionConfig(base, model);
+  const openaiVision = buildOpenAIVisionConfig();
+
+  // VISION_PROVIDER selects which config is primary: "openai" (default) or
+  // "local". The other one is kept as `visionFallback` and is only ever used
+  // if VISION_MODE=local_preferred is set explicitly — no automatic failover
+  // by default. If VISION_PROVIDER=openai but OPENAI_API_KEY is unset, we
+  // degrade to the local config as primary so vision doesn't hard-fail with
+  // no config at all.
+  const wantsLocal = (process.env.VISION_PROVIDER ?? "openai").toLowerCase() === "local";
+  const visionPrimary = wantsLocal ? localVision : openaiVision ?? localVision;
+  // Only expose a secondary provider when it's a genuinely different config
+  // from the primary (avoids "falling back" to the same config it already
+  // tried).
+  const visionFallback = wantsLocal
+    ? openaiVision
+    : openaiVision
+      ? localVision
+      : null;
+
+  return { extraction, visionPrimary, visionFallback };
+}
+
+function buildLocalVisionConfig(defaultBase: string, defaultModel: string): ModelConfig {
+  const vBase = process.env.VISION_PRIMARY_BASE_URL ?? defaultBase;
+  const vModel = process.env.VISION_PRIMARY_MODEL ?? defaultModel;
   return {
-    extraction: {
-      provider: providerFor(base, process.env.MODEL_PROVIDER),
-      baseUrl: base,
-      model,
-      temperature: 0,
-      maxTokens: 2048,
-      disableThinking: true,
-      visionCapable: false,
-    },
-    visionPrimary: {
-      provider: providerFor(vBase, process.env.VISION_PRIMARY_PROVIDER),
-      baseUrl: vBase,
-      model: vModel,
-      temperature: 0,
-      maxTokens: 2048,
-      disableThinking: true,
-      visionCapable: process.env.MODEL_IS_VISION === "1",
-      apiKey: process.env.VISION_PRIMARY_API_KEY,
-    },
-    visionFallback: openaiVisionFallback(),
+    provider: providerFor(vBase, process.env.VISION_PRIMARY_PROVIDER),
+    baseUrl: vBase,
+    model: vModel,
+    temperature: 0,
+    maxTokens: 2048,
+    disableThinking: true,
+    visionCapable: process.env.MODEL_IS_VISION === "1",
+    apiKey: process.env.VISION_PRIMARY_API_KEY,
   };
 }
 
 /**
- * Optional cloud vision fallback (OpenAI). Only built when OPENAI_API_KEY is
- * set — used exclusively in VISION_MODE=local_preferred when the local model
- * is unhealthy or is not vision-capable. Never used silently in
- * local_inference_only mode (no cloud egress in that mode).
+ * OpenAI (or an OpenAI-compatible) vision config. Only built when
+ * OPENAI_API_KEY is set. This is the DEFAULT vision provider
+ * (VISION_PROVIDER unset or "openai") — not merely a fallback for a dead
+ * local model. Set VISION_PROVIDER=local to make the local model the
+ * default instead, with this becoming the (optional, explicitly-enabled)
+ * secondary provider.
  */
-function openaiVisionFallback(): ModelConfig | null {
+function buildOpenAIVisionConfig(): ModelConfig | null {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
   return {
