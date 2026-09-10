@@ -34,7 +34,7 @@
             <label>Minimum year (optional) <input name="minYear" type="number" min="1980" max="2030" step="1" placeholder="e.g. 2015"></label>
           </div>
           <button type="submit" id="search-btn">Build my ranking</button>
-          <p class="hint">Free tier: 1 search per day. Convex processes your job and streams status updates live.</p>
+          <p class="hint">Searches coches.net (the only source for now — more coming soon). Free tier: 1 search per day. Convex processes your job and streams status updates live.</p>
           <div id="form-error" class="error" role="alert" hidden></div>
         </form>
       </section>
@@ -97,7 +97,7 @@
     </dialog>
 
     <footer class="foot">
-      <p>Data: live scrape of coches.net at run time (via Firecrawl) — every job lists the real ads available for your criteria at that moment. Visual inspection uses a configurable OpenAI-compatible model endpoint; when a listing cannot be assessed honestly it is marked "no_evaluable" instead of being invented. This report does not replace an in-person mechanical inspection.</p>
+      <p>Data source: coches.net only, for now — every job scrapes it live at run time (via Firecrawl), so listings are the real ads available for your criteria at that moment. More sources will be added in the future. Visual inspection uses a configurable OpenAI-compatible model endpoint; when a listing cannot be assessed honestly it is marked "no_evaluable" instead of being invented. This report does not replace an in-person mechanical inspection.</p>
     </footer>
   </div>
   <script src="/app.js"></script>
