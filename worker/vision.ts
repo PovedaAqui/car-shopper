@@ -124,15 +124,16 @@ async function analyzeWithModel(
   }
 
   const system =
-    "Eres un inspector de coches de segunda mano. Analiza las fotos del anuncio y responde con JSON estricto. " +
-    "No inventes nada que no veas: si algo no se aprecia, usa 'no_evaluable'. " +
+    "You are a used-car inspector. Analyze the ad's photos and respond with strict JSON. " +
+    "Do not invent anything you cannot see: if something is not visible, use 'no_evaluable'. " +
+    "Write all free-text fields (exterior_details, red_flags) in English. " +
     (neutral
-      ? "Trabaja de forma independiente: no conoces ni te has dado cuenta de otros análisis previos."
+      ? "Work independently: you have no knowledge of any other analysis of this ad."
       : "");
   const userContent: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [
     {
       type: "text",
-      text: `Anuncio ${listing.adId}: ${listing.title} (${listing.price} EUR, ${listing.km} km, ${listing.year ?? "?"}). Describe: color, estado exterior visible (golpes, abolladuras, óxido, repintados, paragolpes, llantas/ruedas), limpieza, y si la foto parece profesional (fondo neutro) o amateur. ¿Aparece algún defecto visible o señal de uso/desgaste? Si una foto es del interior, describe tapicería, desgaste de asientos/volante, limpieza y salpicadero.`,
+      text: `Listing ${listing.adId}: ${listing.title} (${listing.price} EUR, ${listing.km} km, ${listing.year ?? "?"}). Describe: colour, visible exterior condition (dents, scratches, rust, respraying, bumpers, wheels/tyres), cleanliness, and whether the photo looks professional (neutral background) or amateur. Is there any visible defect or sign of wear/use? If a photo is of the interior, describe the upholstery, seat/steering-wheel wear, cleanliness, and dashboard.`,
     },
     ...photos.map((u) => ({ type: "image_url" as const, image_url: { url: u } })),
   ];
@@ -140,7 +141,7 @@ async function analyzeWithModel(
   try {
     const { value, raw, result, error } = await chatJson<any>(cfg, system, userContent, { schemaHint: SCHEMA_HINT, maxTokens: 2048 });
     if (!value) {
-      return { ...noEvaluable(listing.adId, cfg.provider, cfg.model, step, error ?? "respuesta no válida (JSON estricto)"), rawResponse: raw || null };
+      return { ...noEvaluable(listing.adId, cfg.provider, cfg.model, step, error ?? "invalid response (strict JSON)"), rawResponse: raw || null };
     }
     const isSinVer = value.interior_state === "sin_ver";
     return {

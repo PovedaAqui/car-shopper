@@ -152,19 +152,19 @@ export function scoreAll(
     const ppk = pricePerKm(l.price, l.km);
     const notes: string[] = [];
     if (l.dataQualityFlag === "corrupt") {
-      notes.push("datos corruptos (excluido del ranking)");
+      notes.push("corrupt data (excluded from ranking)");
       return {
         adId: l.adId, base: 0, bonuses: 0, riskFactor: 0, visDelta: 0, final: 0,
         pricePerKm: ppk, notes, included: false,
-        exclusionReason: "datos corruptos",
+        exclusionReason: "corrupt data",
       } as ScoreRow;
     }
     if (l.dataQualityFlag === "duplicate") {
-      notes.push(`duplicado de ${l.duplicateOfAdId ?? "?"} (excluido)`);
+      notes.push(`duplicate of ${l.duplicateOfAdId ?? "?"} (excluded)`);
       return {
         adId: l.adId, base: 0, bonuses: 0, riskFactor: 0, visDelta: 0, final: 0,
         pricePerKm: ppk, notes, included: false,
-        exclusionReason: `duplicado de ${l.duplicateOfAdId ?? "?"}`,
+        exclusionReason: `duplicate of ${l.duplicateOfAdId ?? "?"}`,
       } as ScoreRow;
     }
     const base = baseScore(ppk);
