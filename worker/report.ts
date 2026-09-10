@@ -18,7 +18,7 @@ import type { VisionResult } from "./vision.ts";
 import type { ConsensusRow } from "./consensus.ts";
 
 export interface ReportInput {
-  criteria: { make: string; model: string; maxPrice: number; region: string; maxKm?: number };
+  criteria: { make: string; model: string; maxPrice: number; region: string; maxKm?: number; minYear?: number };
   listings: RawListing[];
   scores: ScoreRow[];
   visionPrimary: VisionResult[];
@@ -173,7 +173,7 @@ export function renderReportHTML(input: ReportInput): string {
 <body>
 <div class="wrap">
   <h1>${esc(criteria.make)} ${esc(criteria.model)} — value ranking</h1>
-  <div class="meta">Max. €${esc(criteria.maxPrice)} · ${esc(criteria.region)}${criteria.maxKm ? ` · ≤ ${esc(criteria.maxKm)} km` : ""} · generated ${esc(new Date(input.generatedAt).toLocaleString("en-GB"))} · source: ${esc(input.sourceLabel ?? "coches.net")} · vision: ${esc(providerLabel)}</div>
+  <div class="meta">Max. €${esc(criteria.maxPrice)} · ${esc(criteria.region)}${criteria.maxKm ? ` · ≤ ${esc(criteria.maxKm)} km` : ""}${criteria.minYear ? ` · ${esc(criteria.minYear)}+` : ""} · generated ${esc(new Date(input.generatedAt).toLocaleString("en-GB"))} · source: ${esc(input.sourceLabel ?? "coches.net")} · vision: ${esc(providerLabel)}</div>
 
   <div class="stats">
     <div class="stat"><b>${ranked.length}</b><span>cars ranked</span></div>

@@ -378,6 +378,7 @@ form.addEventListener("submit", async (e) => {
   err.hidden = true;
   const data = new FormData(form);
   const maxKmRaw = (data.get("maxKm") as string)?.trim();
+  const minYearRaw = (data.get("minYear") as string)?.trim();
   const saved = loadSettings();
   const maxPhotos =
     typeof saved.maxPhotos === "number" && Number.isInteger(saved.maxPhotos) && saved.maxPhotos >= 0
@@ -389,6 +390,7 @@ form.addEventListener("submit", async (e) => {
     maxPrice: Number(data.get("maxPrice")),
     region: (data.get("region") as string).trim(),
     ...(maxKmRaw ? { maxKm: Number(maxKmRaw) } : {}),
+    ...(minYearRaw ? { minYear: Number(minYearRaw) } : {}),
     maxPhotos,
   };
   const btn = $("search-btn") as HTMLButtonElement;
@@ -398,14 +400,16 @@ form.addEventListener("submit", async (e) => {
     // Production Convex redacts thrown error messages, so the mutation returns
     // a structured rejection ({ code }) for known client-facing cases instead
     // of throwing. Map those codes to friendly messages.
-    if (created && (created.code === "FREE_TIER_EXHAUSTED" || created.code === "PRICE_OUT_OF_RANGE" || created.code === "PHOTOS_OUT_OF_RANGE")) {
+    if (created && (created.code === "FREE_TIER_EXHAUSTED" || created.code === "PRICE_OUT_OF_RANGE" || created.code === "PHOTOS_OUT_OF_RANGE" || created.code === "YEAR_OUT_OF_RANGE")) {
       err.hidden = false;
       err.textContent =
         created.code === "FREE_TIER_EXHAUSTED"
           ? "Your free search for today has already been used. Try again tomorrow."
           : created.code === "PRICE_OUT_OF_RANGE"
             ? "Please enter a price between €100 and €1,000,000."
-            : "Photos per ad must be a whole number from 0 upward.";
+            : created.code === "YEAR_OUT_OF_RANGE"
+              ? "Please enter a minimum year between 1980 and 2030."
+              : "Photos per ad must be a whole number from 0 upward.";
       return;
     }
     const jobId = typeof created === "string" ? created : created?.jobId;

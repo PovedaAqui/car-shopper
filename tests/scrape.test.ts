@@ -193,6 +193,26 @@ describe("Firecrawl source (live coches.net scrape)", () => {
     expect(source.label()).toContain("live");
   });
 
+  it("minYear filters out cards below it, keeping cards with a missing/unknown year", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input: any, init: any) => {
+      const body = JSON.parse(String(init.body));
+      const isAdDetail = /-covo\.aspx$/.test(body.url);
+      const adId = /-(\d{6,})-/.exec(body.url)?.[1] ?? "0";
+      const pg = /pg=(\d+)/.exec(body.url)?.[1] ?? "1";
+      const markdown = isAdDetail ? AD_PAGE(adId) : pg === "1" ? CATEGORY_MD : "# fin";
+      return new Response(JSON.stringify({ data: { markdown } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const source = new FirecrawlSource("test-key");
+    // 71038515 is 2016 (kept), 71383043 is 2014 (dropped), 71027732 is 2022
+    // but already excluded by the €5000 price cap.
+    const rows = await source.scrape({ ...CRITERIA, minYear: 2015 });
+    expect(rows.map((r) => r.adId)).toEqual(["71038515"]);
+  });
+
   it("stops paginating when a page has no cards", async () => {
     const calls: string[] = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async (_input: any, init: any) => {

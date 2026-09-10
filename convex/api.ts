@@ -26,6 +26,7 @@ export const create = mutation({
       region: v.string(),
       maxKm: v.optional(v.number()),
       maxPhotos: v.optional(v.number()),
+      minYear: v.optional(v.number()),
     }),
   },
   handler: async (ctx, args) => {
@@ -38,6 +39,11 @@ export const create = mutation({
       // 0 = vision deactivated; positive integer = photos per ad cap.
       if (!Number.isInteger(args.criteria.maxPhotos) || args.criteria.maxPhotos < 0) {
         return { jobId: null, code: "PHOTOS_OUT_OF_RANGE", status: "rejected" as const };
+      }
+    }
+    if (args.criteria.minYear !== undefined) {
+      if (!Number.isInteger(args.criteria.minYear) || args.criteria.minYear < 1980 || args.criteria.minYear > 2030) {
+        return { jobId: null, code: "YEAR_OUT_OF_RANGE", status: "rejected" as const };
       }
     }
     const now = Date.now();
@@ -526,8 +532,8 @@ function publicJobView(job: any) {
   };
 }
 
-function hashCriteria(c: { make: string; model: string; maxPrice: number; region: string; maxKm?: number; maxPhotos?: number }): string {
-  const s = `${c.make}|${c.model}|${c.maxPrice}|${c.region}|${c.maxKm ?? "any"}|${c.maxPhotos ?? "def"}`.toLowerCase();
+function hashCriteria(c: { make: string; model: string; maxPrice: number; region: string; maxKm?: number; maxPhotos?: number; minYear?: number }): string {
+  const s = `${c.make}|${c.model}|${c.maxPrice}|${c.region}|${c.maxKm ?? "any"}|${c.maxPhotos ?? "def"}|${c.minYear ?? "any"}`.toLowerCase();
   // FNV-1a (stable across JS engines; not cryptographic).
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {

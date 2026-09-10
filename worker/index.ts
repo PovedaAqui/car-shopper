@@ -114,7 +114,9 @@ async function runLocalOnce(): Promise<void> {
   const model = process.env.LOCAL_MODEL ?? "Yaris";
   const maxPrice = Number(process.env.LOCAL_MAX_PRICE ?? 5000);
   const region = process.env.LOCAL_REGION ?? "Barcelona";
-  const criteria: ScrapeCriteria = { make, model, maxPrice, region };
+  const minYearEnv = process.env.LOCAL_MIN_YEAR;
+  const minYear = minYearEnv ? Number(minYearEnv) : undefined;
+  const criteria: ScrapeCriteria = { make, model, maxPrice, region, ...(minYear ? { minYear } : {}) };
   const stateDir = join(here, "state");
   mkdirSync(stateDir, { recursive: true });
   const reportPath = join(stateDir, "local_report.html");

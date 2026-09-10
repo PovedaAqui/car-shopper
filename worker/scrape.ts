@@ -54,6 +54,10 @@ export interface ScrapeCriteria {
   maxPrice: number;
   region: string;
   maxKm?: number;
+  /** Minimum model year (inclusive). Client-side filter (not a verified
+   * coches.net URL param, unlike maxPrice) — applied the same way maxPrice
+   * over-cap cards are dropped after parsing. */
+  minYear?: number;
   /** Photos per ad to analyze: 0 = vision deactivated, >=1 = cap, undefined = all. */
   maxPhotos?: number;
 }
@@ -159,6 +163,10 @@ export class FirecrawlSource implements ScrapeSource {
       for (const { listing: c, block } of cards) {
         // The capped category page can still render ads above the cap; drop them.
         if (criteria.maxPrice > 0 && c.price > criteria.maxPrice) continue;
+        // minYear is a client-side filter (unverified as a coches.net URL
+        // param): drop cards below it. A missing/unparsed year is kept (we
+        // never exclude on data we don't have).
+        if (criteria.minYear && c.year != null && c.year < criteria.minYear) continue;
         if (!seen.has(c.adId)) {
           const repaired = await this.maybeRepair(c, block);
           seen.set(repaired.adId, repaired);

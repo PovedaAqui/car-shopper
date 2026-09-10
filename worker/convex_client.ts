@@ -33,6 +33,8 @@ export interface ClaimedJob {
     maxKm?: number;
     /** Photos per ad to analyze: 0 = vision deactivated, >=1 = cap, undefined = all. */
     maxPhotos?: number;
+    /** Minimum model year (inclusive). Optional. */
+    minYear?: number;
   };
   requestId?: string;
 }
