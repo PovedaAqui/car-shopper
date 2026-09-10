@@ -26,12 +26,12 @@
         <h2 id="search-h">Find your next car</h2>
         <form id="search-form">
           <div class="grid">
-            <label>Make <input name="make" required value="" placeholder="e.g. Toyota" maxlength="40"></label>
-            <label>Model <input name="model" required value="" placeholder="e.g. Yaris" maxlength="40"></label>
-            <label>Maximum price (€) <input name="maxPrice" type="number" required min="100" max="1000000" placeholder="e.g. 5000"></label>
-            <label>Region <input name="region" required value="" placeholder="e.g. Barcelona" maxlength="60"></label>
-            <label>Maximum kilometres (optional) <input name="maxKm" type="number" min="0" placeholder="any distance"></label>
-            <label>Minimum year (optional) <input name="minYear" type="number" min="1980" max="2030" placeholder="e.g. 2015"></label>
+            <label>Make <input name="make" required value="" placeholder="e.g. Toyota" maxlength="40" pattern="[\p{L}\p{N} .'\-]+" title="Letters, numbers, spaces, hyphens, apostrophes, and periods only"></label>
+            <label>Model <input name="model" required value="" placeholder="e.g. Yaris" maxlength="40" pattern="[\p{L}\p{N} .'\-]+" title="Letters, numbers, spaces, hyphens, apostrophes, and periods only"></label>
+            <label>Maximum price (€) <input name="maxPrice" type="number" required min="100" max="1000000" step="1" placeholder="e.g. 5000"></label>
+            <label>Region <input name="region" required value="" placeholder="e.g. Barcelona" maxlength="60" pattern="[\p{L}\p{N} .'\-]+" title="Letters, numbers, spaces, hyphens, apostrophes, and periods only"></label>
+            <label>Maximum kilometres (optional) <input name="maxKm" type="number" min="0" max="2000000" step="1" placeholder="any distance"></label>
+            <label>Minimum year (optional) <input name="minYear" type="number" min="1980" max="2030" step="1" placeholder="e.g. 2015"></label>
           </div>
           <button type="submit" id="search-btn">Build my ranking</button>
           <p class="hint">Free tier: 1 search per day. Convex processes your job and streams status updates live.</p>

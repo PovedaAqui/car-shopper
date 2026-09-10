@@ -16,17 +16,33 @@ export const requestEmail = mutation({
     confirm: v.boolean(),
   },
   handler: async (ctx, args) => {
-    if (!args.confirm) throw new Error("CONFIRM_REQUIRED: explicit confirmation is required");
-    if (!isValidEmail(args.email)) throw new Error("INVALID_EMAIL");
+    // Return structured rejections (not throw): production Convex redacts
+    // thrown error messages, so a thrown marker would arrive at the client
+    // as a generic "Server Error" and never render a helpful message (same
+    // fix already applied to api.create — see the "friendly error fix" in
+    // hackathon.md).
+    if (!args.confirm) {
+      return { deliveryId: null, code: "CONFIRM_REQUIRED", status: "rejected" as const };
+    }
+    const email = args.email.trim();
+    if (!isValidEmail(email)) {
+      return { deliveryId: null, code: "INVALID_EMAIL", status: "rejected" as const };
+    }
 
     const job = await ctx.db.get("jobs", args.jobId);
-    if (!job || job.userId !== args.userId) throw new Error("NOT_FOUND");
-    if (job.status !== "completed") throw new Error("REPORT_NOT_READY");
+    if (!job || job.userId !== args.userId) {
+      return { deliveryId: null, code: "NOT_FOUND", status: "rejected" as const };
+    }
+    if (job.status !== "completed") {
+      return { deliveryId: null, code: "REPORT_NOT_READY", status: "rejected" as const };
+    }
 
     const report = await ctx.db.query("reports").withIndex("by_job", (q) => q.eq("jobId", args.jobId)).first();
-    if (!report) throw new Error("REPORT_NOT_READY");
+    if (!report) {
+      return { deliveryId: null, code: "REPORT_NOT_READY", status: "rejected" as const };
+    }
 
-    const recipientHash = hashEmail(args.email);
+    const recipientHash = hashEmail(email);
     const existing = await ctx.db
       .query("emailDeliveries")
       .withIndex("by_report_hash", (q) => q.eq("reportId", report._id).eq("recipientHash", recipientHash))
@@ -55,7 +71,7 @@ export const requestEmail = mutation({
       deliveryId,
       jobId: args.jobId,
       reportId: report._id,
-      email: args.email.trim(),
+      email,
       requestId,
     });
 

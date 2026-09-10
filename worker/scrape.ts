@@ -112,8 +112,13 @@ export function regionSlug(region: string): string | null {
 
 /** Category URL for a criteria set, e.g. https://www.coches.net/toyota/yaris/segunda-mano/barcelona/?p=5000 */
 export function categoryUrl(criteria: ScrapeCriteria, page = 1): string {
-  const make = criteria.make.trim().toLowerCase().replace(/\s+/g, "");
-  const model = criteria.model.trim().toLowerCase().replace(/\s+/g, "");
+  // encodeURIComponent defensively, even though validateCriteria (the
+  // authoritative gate before a job is ever created) already restricts
+  // make/model to a safe charset — this keeps the URL well-formed even if
+  // this function is ever called with unvalidated input (e.g. --local dev,
+  // a future caller, a test).
+  const make = encodeURIComponent(criteria.make.trim().toLowerCase().replace(/\s+/g, ""));
+  const model = encodeURIComponent(criteria.model.trim().toLowerCase().replace(/\s+/g, ""));
   const slug = regionSlug(criteria.region);
   const base = `https://www.coches.net/${make}/${model}/segunda-mano${slug ? `/${slug}` : ""}`;
   const q = new URLSearchParams();

@@ -1,6 +1,7 @@
 import { query, mutation, internalQuery, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import { validateCriteria } from "./criteria_lib";
 
 /**
  * Public queries/mutations for the Car Shopper frontend (Convex 1.45 API).
@@ -30,22 +31,13 @@ export const create = mutation({
     }),
   },
   handler: async (ctx, args) => {
-    if (args.criteria.maxPrice < 100 || args.criteria.maxPrice > 1_000_000) {
+    const validated = validateCriteria(args.criteria);
+    if (!validated.ok) {
       // Return (not throw): production Convex redacts thrown error messages,
       // so the marker would not reach the client to render a friendly message.
-      return { jobId: null, code: "PRICE_OUT_OF_RANGE", status: "rejected" as const };
+      return { jobId: null, code: validated.code, status: "rejected" as const };
     }
-    if (args.criteria.maxPhotos !== undefined) {
-      // 0 = vision deactivated; positive integer = photos per ad cap.
-      if (!Number.isInteger(args.criteria.maxPhotos) || args.criteria.maxPhotos < 0) {
-        return { jobId: null, code: "PHOTOS_OUT_OF_RANGE", status: "rejected" as const };
-      }
-    }
-    if (args.criteria.minYear !== undefined) {
-      if (!Number.isInteger(args.criteria.minYear) || args.criteria.minYear < 1980 || args.criteria.minYear > 2030) {
-        return { jobId: null, code: "YEAR_OUT_OF_RANGE", status: "rejected" as const };
-      }
-    }
+    const criteria = validated.criteria;
     const now = Date.now();
     const dayStart = new Date(now).setUTCHours(0, 0, 0, 0);
     const requestId = `${now.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -71,7 +63,7 @@ export const create = mutation({
       return { jobId: null, code: "FREE_TIER_EXHAUSTED", status: "rejected" as const };
     }
 
-    const idempotencyKey = `${args.userId}:${hashCriteria(args.criteria)}`;
+    const idempotencyKey = `${args.userId}:${hashCriteria(criteria)}`;
     const existing = (await ctx.db.query("jobs").withIndex("by_user", (q) => q.eq("userId", args.userId)).collect())
       .filter((j) => j.idempotencyKey === idempotencyKey && j.createdAt >= dayStart && !["failed", "cancelled", "expired"].includes(j.status));
     if (existing.length > 0) {
@@ -87,7 +79,7 @@ export const create = mutation({
     const jobId = await ctx.db.insert("jobs", {
       userId: args.userId,
       idempotencyKey,
-      criteria: args.criteria,
+      criteria,
       status: "claimed",
       stage: "scraping",
       progress: 2,

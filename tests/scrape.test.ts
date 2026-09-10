@@ -84,6 +84,16 @@ describe("category URL building", () => {
       "https://www.coches.net/toyota/yaris/segunda-mano/?maxPrice=5000&pg=2",
     );
   });
+
+  it("URL-encodes make/model defensively, even though validateCriteria (convex/criteria_lib.ts) already rejects URL-structural characters before a job reaches this function", () => {
+    // Simulates a caller that bypasses validateCriteria (e.g. --local dev,
+    // a future direct call) — categoryUrl must not produce a malformed or
+    // reinterpreted URL even then.
+    const url = categoryUrl({ ...CRITERIA, make: "Toyota/../etc", model: "Yaris?x=1" }, 1);
+    expect(url).not.toContain("/../");
+    expect(url).toContain("toyota%2F..%2Fetc");
+    expect(url).toContain("yaris%3Fx%3D1");
+  });
 });
 
 describe("extractPhotoUrls", () => {

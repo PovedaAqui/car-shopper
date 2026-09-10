@@ -13,6 +13,7 @@
 import { ConvexClient } from "convex/browser";
 import { api } from "../convex/_generated/api.js";
 import type { Id } from "../convex/_generated/dataModel.js";
+import { validateCriteria } from "../convex/criteria_lib.ts";
 
 const DEPLOYMENT_URL: string =
   (globalThis as any).VITE_CONVEX_URL ?? "http://127.0.0.1:3210";
@@ -95,6 +96,14 @@ let pollTimer: number | null = null;
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 setupSettings();
+
+// Mirrors convex/email_lib.ts isValidEmail (kept duplicated, not imported,
+// so the frontend bundle stays self-contained and framework-free).
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function isLikelyEmail(raw: string): boolean {
+  const e = raw.trim().toLowerCase();
+  return e.length >= 6 && e.length <= 254 && EMAIL_RE.test(e);
+}
 
 function esc(s: unknown): string {
   return String(s ?? "")
@@ -372,44 +381,100 @@ function renderHistory(jobs: any[]) {
 // ---------------------------------------------------------------------------
 
 const form = $("search-form") as HTMLFormElement;
+const FIELD_IDS: Record<string, string> = {
+  make: "make",
+  model: "model",
+  maxPrice: "maxPrice",
+  region: "region",
+  maxKm: "maxKm",
+  minYear: "minYear",
+};
+
+function setFieldInvalid(fieldName: string, message: string) {
+  const el = form.elements.namedItem(fieldName) as HTMLInputElement | null;
+  if (el) {
+    el.setCustomValidity(message);
+    el.reportValidity();
+  }
+}
+
+function clearFieldValidity() {
+  for (const name of Object.values(FIELD_IDS)) {
+    const el = form.elements.namedItem(name) as HTMLInputElement | null;
+    if (el) el.setCustomValidity("");
+  }
+}
+
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const err = $("form-error");
   err.hidden = true;
+  clearFieldValidity();
   const data = new FormData(form);
-  const maxKmRaw = (data.get("maxKm") as string)?.trim();
-  const minYearRaw = (data.get("minYear") as string)?.trim();
   const saved = loadSettings();
   const maxPhotos =
     typeof saved.maxPhotos === "number" && Number.isInteger(saved.maxPhotos) && saved.maxPhotos >= 0
       ? saved.maxPhotos
       : DEFAULT_MAX_PHOTOS;
-  const criteria = {
-    make: (data.get("make") as string).trim(),
-    model: (data.get("model") as string).trim(),
-    maxPrice: Number(data.get("maxPrice")),
-    region: (data.get("region") as string).trim(),
-    ...(maxKmRaw ? { maxKm: Number(maxKmRaw) } : {}),
-    ...(minYearRaw ? { minYear: Number(minYearRaw) } : {}),
+
+  // Client-side pre-check mirrors convex/api.ts's server-side validation
+  // exactly (same validateCriteria function, imported directly — not
+  // duplicated logic that could drift) so obviously-bad input (empty
+  // fields beyond what HTML5 `required` catches after trimming whitespace,
+  // out-of-range numbers, overlong text) is caught instantly with a
+  // specific, actionable message, before spending a round trip. The server
+  // re-validates regardless (this check is bypassable via devtools/direct
+  // API calls), so this is purely a UX improvement, not the security
+  // boundary.
+  const precheck = validateCriteria({
+    make: data.get("make"),
+    model: data.get("model"),
+    maxPrice: data.get("maxPrice"),
+    region: data.get("region"),
+    maxKm: (data.get("maxKm") as string)?.trim() || undefined,
+    minYear: (data.get("minYear") as string)?.trim() || undefined,
     maxPhotos,
-  };
+  });
+  if (!precheck.ok) {
+    err.hidden = false;
+    err.textContent = precheck.message;
+    if (precheck.field !== "form" && precheck.field in FIELD_IDS) {
+      setFieldInvalid(FIELD_IDS[precheck.field], precheck.message);
+    }
+    return;
+  }
+  const criteria = precheck.criteria;
+
   const btn = $("search-btn") as HTMLButtonElement;
   btn.disabled = true;
   try {
     const created: any = await client.mutation(api.api.create, { userId, criteria });
     // Production Convex redacts thrown error messages, so the mutation returns
     // a structured rejection ({ code }) for known client-facing cases instead
-    // of throwing. Map those codes to friendly messages.
-    if (created && (created.code === "FREE_TIER_EXHAUSTED" || created.code === "PRICE_OUT_OF_RANGE" || created.code === "PHOTOS_OUT_OF_RANGE" || created.code === "YEAR_OUT_OF_RANGE")) {
+    // of throwing. Map those codes to friendly messages. Most of these are
+    // now also caught by the client-side precheck above, but this stays as
+    // defense-in-depth against a stale/bypassed client and the server's own
+    // authoritative validation (which can differ, e.g. FREE_TIER_EXHAUSTED).
+    const SERVER_ERROR_MESSAGES: Record<string, string> = {
+      FREE_TIER_EXHAUSTED: "Your free search for today has already been used. Try again tomorrow.",
+      MAKE_REQUIRED: "Please enter a make (e.g. Toyota).",
+      MODEL_REQUIRED: "Please enter a model (e.g. Yaris).",
+      REGION_REQUIRED: "Please enter a region (e.g. Barcelona).",
+      MAKE_TOO_LONG: "Make must be 40 characters or fewer.",
+      MODEL_TOO_LONG: "Model must be 40 characters or fewer.",
+      REGION_TOO_LONG: "Region must be 60 characters or fewer.",
+      MAKE_INVALID_CHARS: "Make can only contain letters, numbers, spaces, hyphens, apostrophes, and periods.",
+      MODEL_INVALID_CHARS: "Model can only contain letters, numbers, spaces, hyphens, apostrophes, and periods.",
+      REGION_INVALID_CHARS: "Region can only contain letters, numbers, spaces, hyphens, apostrophes, and periods.",
+      PRICE_REQUIRED: "Please enter a maximum price.",
+      PRICE_OUT_OF_RANGE: "Please enter a price between €100 and €1,000,000.",
+      KM_OUT_OF_RANGE: "Maximum kilometres must be a whole number between 0 and 2,000,000.",
+      YEAR_OUT_OF_RANGE: "Please enter a minimum year between 1980 and 2030.",
+      PHOTOS_OUT_OF_RANGE: "Photos per ad must be a whole number from 0 upward.",
+    };
+    if (created && typeof created.code === "string" && created.code in SERVER_ERROR_MESSAGES) {
       err.hidden = false;
-      err.textContent =
-        created.code === "FREE_TIER_EXHAUSTED"
-          ? "Your free search for today has already been used. Try again tomorrow."
-          : created.code === "PRICE_OUT_OF_RANGE"
-            ? "Please enter a price between €100 and €1,000,000."
-            : created.code === "YEAR_OUT_OF_RANGE"
-              ? "Please enter a minimum year between 1980 and 2030."
-              : "Photos per ad must be a whole number from 0 upward.";
+      err.textContent = SERVER_ERROR_MESSAGES[created.code];
       return;
     }
     const jobId = typeof created === "string" ? created : created?.jobId;
@@ -430,21 +495,51 @@ emailForm?.addEventListener("submit", async (e) => {
   if (!activeJobId) return;
   const status = $("email-status");
   const data = new FormData(emailForm);
+  const rawEmail = String(data.get("email") ?? "").trim();
+  const confirm = data.get("confirm") === "on";
   const btn = $("email-btn") as HTMLButtonElement;
+
+  // Client-side pre-check mirrors the server (convex/email_lib.ts
+  // isValidEmail) so an obviously-bad address is rejected instantly,
+  // without a round trip — the server re-validates regardless, since this
+  // check can be bypassed (devtools, direct API calls).
+  if (!rawEmail || !isLikelyEmail(rawEmail)) {
+    status.textContent = "Please enter a valid email address.";
+    return;
+  }
+  if (!confirm) {
+    status.textContent = "Please check the confirmation box before sending.";
+    return;
+  }
+
   btn.disabled = true;
   status.textContent = "Sending…";
   try {
-    const result = await client.mutation(api.email.requestEmail, {
+    const result: any = await client.mutation(api.email.requestEmail, {
       jobId: activeJobId,
       userId,
-      email: String(data.get("email") ?? ""),
-      confirm: data.get("confirm") === "on",
+      email: rawEmail,
+      confirm,
     });
+    // Production Convex redacts thrown error messages, so requestEmail
+    // returns a structured rejection ({ code }) for known client-facing
+    // cases instead of throwing (same pattern as api.create). Map those
+    // codes to friendly messages.
+    const EMAIL_ERROR_MESSAGES: Record<string, string> = {
+      CONFIRM_REQUIRED: "Please check the confirmation box before sending.",
+      INVALID_EMAIL: "Please enter a valid email address.",
+      NOT_FOUND: "This search could not be found.",
+      REPORT_NOT_READY: "The report isn't ready yet — please wait for the search to complete.",
+    };
+    if (result && typeof result.code === "string" && result.code in EMAIL_ERROR_MESSAGES) {
+      status.textContent = EMAIL_ERROR_MESSAGES[result.code];
+      return;
+    }
     status.textContent = result?.reused
       ? "A delivery to this address was already sent — not resent."
       : "Send queued (AgentMail).";
   } catch (err: any) {
-    status.textContent = err?.message ?? String(err);
+    status.textContent = "The email could not be sent. Please try again.";
   } finally {
     btn.disabled = false;
   }
