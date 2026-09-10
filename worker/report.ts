@@ -5,6 +5,11 @@
  * vision results (criterion: 0 invented findings). Escapes all external
  * content. No remote scripts; thumbnails hotlink to the portal CDN with an
  * `onerror` placeholder fallback (plan §13 risk: expiring CDN URLs).
+ *
+ * Language: English (default). Internal state values (bien/regular/mal/
+ * no_evaluable, etc.) are the pipeline's fixed vocabulary — see
+ * scoring.ts/consensus.ts/vision.ts — and are translated to English display
+ * labels here at render time.
  */
 
 import type { RawListing } from "./scrape.ts";
@@ -19,7 +24,7 @@ export interface ReportInput {
   visionPrimary: VisionResult[];
   consensus: ConsensusRow[];
   providerLabel: string;
-  /** "fuente: ..." label for the report meta line. */
+  /** "source: ..." label for the report meta line. */
   sourceLabel?: string;
   generatedAt: number;
   jobStage: string;
@@ -45,6 +50,27 @@ const stateClass: Record<string, string> = {
   no_evaluable: "b-muted",
 };
 
+/** English display labels for the pipeline's internal exterior/interior/cleanliness states. */
+const EXTERIOR_LABEL: Record<string, string> = {
+  bien: "good",
+  regular: "fair",
+  mal: "poor",
+  no_evaluable: "not evaluable",
+};
+
+const CLEANLINESS_LABEL: Record<string, string> = {
+  limpio: "clean",
+  regular: "fair",
+  descuidado: "neglected",
+  no_evaluable: "not evaluable",
+};
+
+const CONSENSUS_LABEL: Record<string, string> = {
+  consenso: "consensus",
+  discrepancia: "discrepancy",
+  no_evaluable: "not evaluable",
+};
+
 export function renderReportHTML(input: ReportInput): string {
   const { criteria, listings, scores, visionPrimary, consensus, providerLabel } = input;
   const byAd = new Map(listings.map((l) => [l.adId, l]));
@@ -60,27 +86,31 @@ export function renderReportHTML(input: ReportInput): string {
       const c = consensusByAd.get(s.adId);
       const photo = l.photoUrls[0];
       const photoHtml = photo
-        ? `<img class="thumb" loading="lazy" src="${esc(photo)}" alt="miniatura ${esc(l.adId)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><span class="thumb-ph" style="display:none">${esc(s.adId)}</span>`
-        : `<span class="thumb thumb-none">sin fotos</span>`;
+        ? `<img class="thumb" loading="lazy" src="${esc(photo)}" alt="thumbnail ${esc(l.adId)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><span class="thumb-ph" style="display:none">${esc(s.adId)}</span>`
+        : `<span class="thumb thumb-none">no photos</span>`;
       const vBadges = v
-        ? [badge(stateClass[v.exteriorState], `ext. ${v.exteriorState}`), v.color ? badge("b-info", esc(v.color)) : "", v.cleanliness !== "no_evaluable" ? badge("b-info", `limp. ${v.cleanliness}`) : ""]
+        ? [
+            badge(stateClass[v.exteriorState], `exterior: ${EXTERIOR_LABEL[v.exteriorState] ?? v.exteriorState}`),
+            v.color ? badge("b-info", esc(v.color)) : "",
+            v.cleanliness !== "no_evaluable" ? badge("b-info", `cleanliness: ${CLEANLINESS_LABEL[v.cleanliness] ?? v.cleanliness}`) : "",
+          ]
             .filter(Boolean)
             .join(" ")
         : "";
       const cBadge = c
         ? c.badge === "discrepancia"
-          ? badge("b-bad", "⚠ discrepancia")
+          ? badge("b-bad", "⚠ discrepancy")
           : c.badge === "consenso"
-            ? badge("b-good", "consenso")
-            : badge("b-muted", "no evaluable")
+            ? badge("b-good", "consensus")
+            : badge("b-muted", "not evaluable")
         : "";
       const redFlags = v && v.redFlags.length > 0 ? `<div class="flags">${v.redFlags.map((f) => `· ${esc(f)}`).join("<br>")}</div>` : "";
       return `<tr>
         <td class="rank">${s.rank}</td>
         <td>${photoHtml}</td>
-        <td class="title"><a href="${esc(l.sourceUrl)}" target="_blank" rel="noopener noreferrer">${esc(l.title)}</a><div class="sub">${esc(l.city ?? "—")} · ${l.year ?? "año n/d"} · ${esc(l.fuel ?? "—")}</div></td>
+        <td class="title"><a href="${esc(l.sourceUrl)}" target="_blank" rel="noopener noreferrer">${esc(l.title)}</a><div class="sub">${esc(l.city ?? "—")} · ${l.year ?? "year n/a"} · ${esc(l.fuel ?? "—")}</div></td>
         <td class="num">€ ${s.pricePerKm.toFixed(2)}/km</td>
-        <td class="num">${esc(l.price).replace(".", ",")} €</td>
+        <td class="num">€${Number(l.price).toLocaleString("en-GB")}</td>
         <td class="num">${(l.km / 1000).toFixed(0)}k km</td>
         <td class="score">${s.final.toFixed(1)}${s.visDelta !== 0 ? `<span class="delta ${s.visDelta > 0 ? "pos" : "neg"}">(${s.visDelta > 0 ? "+" : ""}${s.visDelta})</span>` : ""}</td>
         <td class="vision">${vBadges} ${cBadge}${redFlags}</td>
@@ -89,7 +119,7 @@ export function renderReportHTML(input: ReportInput): string {
     .join("\n");
 
   const excludedHtml = excluded.length
-    ? `<section><h2>Excluidos del ranking (${excluded.length})</h2><table class="tbl"><thead><tr><th>Ad</th><th>Título</th><th>Motivo</th></tr></thead><tbody>${excluded
+    ? `<section><h2>Excluded from ranking (${excluded.length})</h2><table class="tbl"><thead><tr><th>Ad</th><th>Title</th><th>Reason</th></tr></thead><tbody>${excluded
         .map((s) => {
           const l = byAd.get(s.adId);
           return `<tr><td>${esc(s.adId)}</td><td>${esc(l?.title ?? "—")}</td><td>${esc(s.exclusionReason ?? "—")}</td></tr>`;
@@ -101,12 +131,12 @@ export function renderReportHTML(input: ReportInput): string {
   const nEvaluable = visionPrimary.filter((v) => v.exteriorState !== "no_evaluable").length;
 
   return `<!doctype html>
-<html lang="es">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Car Shopper — ${esc(criteria.make)} ${esc(criteria.model)} ≤ ${esc(criteria.maxPrice)} €</title>
+<title>Car Shopper — ${esc(criteria.make)} ${esc(criteria.model)} ≤ €${esc(criteria.maxPrice)}</title>
 <style>
   :root { color-scheme: light dark; }
   body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 24px; line-height: 1.45; }
@@ -142,24 +172,24 @@ export function renderReportHTML(input: ReportInput): string {
 </head>
 <body>
 <div class="wrap">
-  <h1>${esc(criteria.make)} ${esc(criteria.model)} — ranking calidad/precio</h1>
-  <div class="meta">Máx. ${esc(criteria.maxPrice)} € · ${esc(criteria.region)}${criteria.maxKm ? ` · ≤ ${esc(criteria.maxKm)} km` : ""} · generado ${esc(new Date(input.generatedAt).toLocaleString("es-ES"))} · fuente: ${esc(input.sourceLabel ?? "coches.net")} · visión: ${esc(providerLabel)}</div>
+  <h1>${esc(criteria.make)} ${esc(criteria.model)} — value ranking</h1>
+  <div class="meta">Max. €${esc(criteria.maxPrice)} · ${esc(criteria.region)}${criteria.maxKm ? ` · ≤ ${esc(criteria.maxKm)} km` : ""} · generated ${esc(new Date(input.generatedAt).toLocaleString("en-GB"))} · source: ${esc(input.sourceLabel ?? "coches.net")} · vision: ${esc(providerLabel)}</div>
 
   <div class="stats">
-    <div class="stat"><b>${ranked.length}</b><span>coches en ranking</span></div>
-    <div class="stat"><b>${excluded.length}</b><span>excluidos (datos)</span></div>
-    <div class="stat"><b>${nPhotos}</b><span>fotos analizadas</span></div>
+    <div class="stat"><b>${ranked.length}</b><span>cars ranked</span></div>
+    <div class="stat"><b>${excluded.length}</b><span>excluded (data)</span></div>
+    <div class="stat"><b>${nPhotos}</b><span>photos analyzed</span></div>
     <div class="stat"><b>${nEvaluable}</b><span>exterior evaluable</span></div>
   </div>
 
   <table class="tbl">
-    <thead><tr><th>#</th><th></th><th>Anuncio</th><th>€/km</th><th>Precio</th><th>Km</th><th>Score</th><th>Inspección visual</th></tr></thead>
+    <thead><tr><th>#</th><th></th><th>Listing</th><th>€/km</th><th>Price</th><th>Km</th><th>Score</th><th>Visual inspection</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
 
   ${excludedHtml}
 
-  <p class="note">Método: score = f(€/km) + bonificaciones (garantía, profesional, año) − riesgo mecánico + delta visual fijo (desgaste −6, sin fotos −5, stock sospechoso −40, interior visto bien +4, exterior bien +2 / regular −6 / mal −18 / no evaluable −2). Doble inspección visual con criterio severo ante discrepancia. Este informe no sustituye una inspección mecánica presencial.</p>
+  <p class="note">Method: score = f(€/km) + bonuses (warranty, professional seller, recent year) − mechanical risk + fixed visual delta (wear −6, no photos −5, suspect stock photos −40, interior looks good +4, exterior good +2 / fair −6 / poor −18 / not evaluable −2). Two independent visual inspection passes, strict rule on disagreement. This report does not replace an in-person mechanical inspection.</p>
 </div>
 </body>
 </html>`;

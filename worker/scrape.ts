@@ -128,7 +128,7 @@ export function categoryUrl(criteria: ScrapeCriteria, page = 1): string {
  */
 export class FirecrawlSource implements ScrapeSource {
   name = "firecrawl";
-  private lastLabel = "coches.net (en vivo)";
+  private lastLabel = "coches.net (live)";
   /** Pacing between Firecrawl requests (free plan: 20 req/min window). */
   private minIntervalMs: number;
   private lastRequestAt = 0;
@@ -182,7 +182,7 @@ export class FirecrawlSource implements ScrapeSource {
       }
     }
     const slug = regionSlug(criteria.region);
-    this.lastLabel = `coches.net (en vivo, scrape ${new Date().toLocaleDateString("es-ES")} · ${slug ?? "ámbito nacional"})`;
+    this.lastLabel = `coches.net (live, scraped ${new Date().toLocaleDateString("en-GB")} · ${slug ?? "national scope"})`;
     return [...seen.values()];
   }
 

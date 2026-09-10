@@ -43,15 +43,15 @@ describe("report HTML", () => {
       visionPrimary: [],
       consensus: [],
       providerLabel: "test",
-      sourceLabel: "coches.net (en vivo, scrape 28/08/2026 · barcelona)",
+      sourceLabel: "coches.net (live, scrape 28/08/2026 · barcelona)",
       generatedAt: 1,
       jobStage: "completed",
     });
     expect(html).not.toContain("<script>alert(1)</script>");
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     expect(html).toContain("noindex");
-    expect(html).toContain("no sustituye una inspección mecánica");
-    expect(html).toContain("fuente: coches.net (en vivo");
+    expect(html).toContain("does not replace an in-person mechanical inspection");
+    expect(html).toContain("source: coches.net (live");
     const headerCells = (html.match(/<thead><tr>(.*?)<\/tr><\/thead>/s)?.[1].match(/<th/g) ?? []).length;
     const firstRowTds = (html.match(/<tbody><tr>(.*?)<\/tr>/s)?.[1].match(/<td/g) ?? []).length;
     expect(headerCells).toBe(8);

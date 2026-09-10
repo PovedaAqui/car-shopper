@@ -240,7 +240,7 @@ function renderJobView(job: any) {
   wrap.setAttribute("aria-valuenow", String(pct));
   $("stage-text").textContent =
     status === "failed"
-      ? `Error: ${job.errorMsg ?? job.errorCode ?? "desconocido"}`
+      ? `Error: ${job.errorMsg ?? job.errorCode ?? "unknown"}`
       : `${STAGE_LABELS[status] ?? status} — ${pct}%`;
 
   const c = job.counts ?? {};
@@ -301,7 +301,7 @@ function renderScores(scores: any[]) {
   for (const s of scores) {
     const tr = el("tr", "");
     const flag =
-      s.dataQualityFlag === "ok" ? "" : `<span class="flag">${s.dataQualityFlag === "duplicate" ? "duplicado" : "datos corruptos"}</span>`;
+      s.dataQualityFlag === "ok" ? "" : `<span class="flag">${s.dataQualityFlag === "duplicate" ? "duplicate" : "corrupt data"}</span>`;
     tr.innerHTML = `
       <td>${esc(s.rank ?? "–")}</td>
       <td>${esc(s.title)} <span class="sub">${esc(s.city ?? "—")} · ${esc(s.year ?? "n/d")}</span></td>
@@ -428,7 +428,7 @@ emailForm?.addEventListener("submit", async (e) => {
   const data = new FormData(emailForm);
   const btn = $("email-btn") as HTMLButtonElement;
   btn.disabled = true;
-  status.textContent = "Enviando…";
+  status.textContent = "Sending…";
   try {
     const result = await client.mutation(api.email.requestEmail, {
       jobId: activeJobId,
@@ -437,8 +437,8 @@ emailForm?.addEventListener("submit", async (e) => {
       confirm: data.get("confirm") === "on",
     });
     status.textContent = result?.reused
-      ? "Ya había un envío para esta dirección — no se ha reenviado."
-      : "Envío en cola (AgentMail).";
+      ? "A delivery to this address was already sent — not resent."
+      : "Send queued (AgentMail).";
   } catch (err: any) {
     status.textContent = err?.message ?? String(err);
   } finally {

@@ -190,7 +190,7 @@ describe("Firecrawl source (live coches.net scrape)", () => {
     // Each listing was enriched with its ad-page photo (a.ccdn.es, real).
     expect(rows.every((r) => r.photoUrls.length === 1)).toBe(true);
     expect(rows[0].photoUrls[0]).toContain("a.ccdn.es/cnet/");
-    expect(source.label()).toContain("en vivo");
+    expect(source.label()).toContain("live");
   });
 
   it("stops paginating when a page has no cards", async () => {
