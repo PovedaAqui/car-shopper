@@ -69,7 +69,7 @@ export async function runPipeline(
   } else {
     // --- 1. Scrape -----------------------------------------------------------
     await progress.onStage("scraping", 5);
-    const raw = await (source ?? defaultSource()).scrape(criteria);
+    const raw = await (source ?? defaultSource(models.extraction)).scrape(criteria);
     if (raw.length === 0) {
       throw new Error("NO_LISTINGS: the source returned zero listings for these criteria");
     }

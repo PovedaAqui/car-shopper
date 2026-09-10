@@ -117,15 +117,15 @@ export function defaultModels(): {
 } {
   const base = process.env.MODEL_BASE_URL ?? "http://localhost:8000/v1";
   const model = process.env.MODEL_NAME ?? "qwen38-27b-unsloth-nvfp4-dflash2";
-  const extraction: ModelConfig = {
-    provider: providerFor(base, process.env.MODEL_PROVIDER),
-    baseUrl: base,
-    model,
-    temperature: 0,
-    maxTokens: 2048,
-    disableThinking: true,
-    visionCapable: false,
-  };
+
+  const localText = buildLocalTextConfig(base, model);
+  const openaiText = buildOpenAITextConfig();
+  // TEXT_PROVIDER selects the primary text-extraction provider: "openai"
+  // (default) or "local". Same semantics as VISION_PROVIDER below: if
+  // OPENAI_API_KEY is unset, degrade gracefully to the local config instead
+  // of hard-failing.
+  const wantsLocalText = (process.env.TEXT_PROVIDER ?? "openai").toLowerCase() === "local";
+  const extraction = wantsLocalText ? localText : openaiText ?? localText;
 
   const localVision = buildLocalVisionConfig(base, model);
   const openaiVision = buildOpenAIVisionConfig();
@@ -148,6 +148,39 @@ export function defaultModels(): {
       : null;
 
   return { extraction, visionPrimary, visionFallback };
+}
+
+/** Local text-extraction config (vLLM/Ollama/LM Studio), no vision. */
+function buildLocalTextConfig(defaultBase: string, defaultModel: string): ModelConfig {
+  return {
+    provider: providerFor(defaultBase, process.env.MODEL_PROVIDER),
+    baseUrl: defaultBase,
+    model: defaultModel,
+    temperature: 0,
+    maxTokens: 512,
+    disableThinking: true,
+    visionCapable: false,
+  };
+}
+
+/**
+ * OpenAI (or OpenAI-compatible) text-extraction config. Only built when
+ * OPENAI_API_KEY is set. This is the DEFAULT text provider (TEXT_PROVIDER
+ * unset or "openai"). Set TEXT_PROVIDER=local to use the local model
+ * instead.
+ */
+function buildOpenAITextConfig(): ModelConfig | null {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
+  return {
+    provider: "openai_compat",
+    baseUrl: process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1",
+    model: process.env.OPENAI_TEXT_MODEL ?? "gpt-4o-mini",
+    temperature: 0,
+    maxTokens: 512,
+    visionCapable: false,
+    apiKey,
+  };
 }
 
 function buildLocalVisionConfig(defaultBase: string, defaultModel: string): ModelConfig {

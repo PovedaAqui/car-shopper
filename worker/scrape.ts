@@ -6,7 +6,20 @@
  * fixtures, or hardcoded workflows: the listings in each report are the ads
  * coches.net serves at run time. If the live source fails, the job fails —
  * the pipeline never invents or substitutes data.
+ *
+ * Text extraction: card parsing is primarily deterministic regex (fast,
+ * free, no LLM). When a card's price or mileage cannot be parsed from the
+ * card text (rare formatting variants), an optional text model repairs just
+ * those fields by reading the SAME raw card text — it only fills what is
+ * literally present, never invents a number. That model is cloud (OpenAI)
+ * by default; TEXT_PROVIDER=local switches to the local OpenAI-compatible
+ * endpoint. If no text model is configured/healthy, the repair step is
+ * skipped and the listing keeps its (possibly incomplete) regex values —
+ * `isCorruptListing` still excludes it from ranking as before.
  */
+
+import type { ModelConfig } from "./providers.ts";
+import { chatJson, ProviderError } from "./providers.ts";
 
 export interface RawListing {
   source: string;
@@ -123,7 +136,10 @@ export class FirecrawlSource implements ScrapeSource {
     private apiKey: string,
     private endpoint = "https://api.firecrawl.dev/v1",
     private maxPages = 3,
-    pacingMs = Number(process.env.FIRECRAWL_MIN_INTERVAL_MS ?? 3500)
+    pacingMs = Number(process.env.FIRECRAWL_MIN_INTERVAL_MS ?? 3500),
+    /** Optional text-repair model (cloud by default, see providers.ts
+     * TEXT_PROVIDER). Only invoked for cards regex could not fully parse. */
+    private textModel: ModelConfig | null = null
   ) {
     this.minIntervalMs = pacingMs >= 0 ? pacingMs : 3500;
   }
@@ -137,12 +153,15 @@ export class FirecrawlSource implements ScrapeSource {
     for (let pg = 1; pg <= this.maxPages; pg++) {
       const url = categoryUrl(criteria, pg);
       const markdown = await this.fetchRaw(url, ["markdown"]);
-      const cards = parseCategoryCards(markdown, criteria);
+      const cards = parseCategoryCardsRaw(markdown, criteria);
       if (cards.length === 0) break; // last page / empty scope
-      for (const c of cards) {
+      for (const { listing: c, block } of cards) {
         // The capped category page can still render ads above the cap; drop them.
         if (criteria.maxPrice > 0 && c.price > criteria.maxPrice) continue;
-        if (!seen.has(c.adId)) seen.set(c.adId, c);
+        if (!seen.has(c.adId)) {
+          const repaired = await this.maybeRepair(c, block);
+          seen.set(repaired.adId, repaired);
+        }
       }
     }
     if (seen.size === 0) {
@@ -163,6 +182,39 @@ export class FirecrawlSource implements ScrapeSource {
     const slug = regionSlug(criteria.region);
     this.lastLabel = `coches.net (en vivo, scrape ${new Date().toLocaleDateString("es-ES")} · ${slug ?? "ámbito nacional"})`;
     return [...seen.values()];
+  }
+
+  /**
+   * Regex misses price/km on a small share of cards (formatting variants).
+   * When that happens and a text model is configured, ask it to re-read the
+   * SAME raw card text and return only price/km it can literally find there
+   * — never invent a number. No model configured / call fails -> the
+   * listing keeps its regex values unchanged (isCorruptListing still
+   * excludes it downstream as before this feature existed).
+   */
+  private async maybeRepair(listing: RawListing, block: string): Promise<RawListing> {
+    if (listing.price > 0 && listing.km > 0) return listing;
+    if (!this.textModel) return listing;
+    try {
+      const { value } = await chatJson<{ price: number | null; km: number | null }>(
+        this.textModel,
+        "Extrae SOLO precio (€) y kilometraje (km) de este fragmento de un anuncio de coche de segunda mano. " +
+          "Si un valor no aparece literalmente en el texto, devuelve null para ese campo. No inventes ni estimes.",
+        `Fragmento:\n${block.slice(0, 800)}`,
+        { schemaHint: '{"price": number|null, "km": number|null}' }
+      );
+      if (!value) return listing;
+      return {
+        ...listing,
+        price: listing.price > 0 ? listing.price : Number(value.price) > 0 ? Number(value.price) : listing.price,
+        km: listing.km > 0 ? listing.km : Number(value.km) > 0 ? Number(value.km) : listing.km,
+      };
+    } catch (e) {
+      // A repair failure (unreachable model, invalid JSON, etc.) must not
+      // sink the job: keep the regex-parsed (possibly incomplete) listing.
+      if (e instanceof ProviderError) return listing;
+      throw e;
+    }
   }
 
   /** Fetch one ad page and return its real vehicle photo URLs (up to the cap). */
@@ -243,10 +295,20 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
  *   ![TOYOTA Yaris 1.5 125 SEdition](https://a.ccdn.es/cnet/vehicles/.../560x421cut/)
  */
 export function parseCategoryCards(markdown: string, criteria: ScrapeCriteria): RawListing[] {
+  return parseCategoryCardsRaw(markdown, criteria).map((r) => r.listing);
+}
+
+/** Same parse as parseCategoryCards, but also returns each card's raw block
+ * text so an optional text-repair pass can re-read exactly what was on the
+ * page (never inventing data not present in it). */
+export function parseCategoryCardsRaw(
+  markdown: string,
+  criteria: ScrapeCriteria
+): Array<{ listing: RawListing; block: string }> {
   const fetchedAt = Date.now();
   const cardRe =
     /##\s*\[([^\]]+)\]\((https:\/\/www\.coches\.net\/[^\s)]*?-(\d{6,})-[^\s)]*?\.aspx)\)([\s\S]*?)(?=\n##\s|\n\[\d+ de|## Anuncios|$)/g;
-  const out: RawListing[] = [];
+  const out: Array<{ listing: RawListing; block: string }> = [];
   let m: RegExpExecArray | null;
   while ((m = cardRe.exec(markdown)) !== null) {
     const title = m[1].trim();
@@ -277,21 +339,24 @@ export function parseCategoryCards(markdown: string, criteria: ScrapeCriteria): 
     const photoUrls = extractPhotoUrls(block);
 
     out.push({
-      source: "firecrawl",
-      adId,
-      sourceUrl,
-      title,
-      price,
-      km,
-      year,
-      fuel: fuelMatch ? fuelMatch[1].trim() : null,
-      city: criteria.region,
-      hasWarranty: /garant[ií]a|warranty/i.test(block),
-      isPro: /profesional/i.test(block),
-      photoCount: photoUrls.length,
-      photoUrls,
-      dataQualityFlag: "ok",
-      fetchedAt,
+      listing: {
+        source: "firecrawl",
+        adId,
+        sourceUrl,
+        title,
+        price,
+        km,
+        year,
+        fuel: fuelMatch ? fuelMatch[1].trim() : null,
+        city: criteria.region,
+        hasWarranty: /garant[ií]a|warranty/i.test(block),
+        isPro: /profesional/i.test(block),
+        photoCount: photoUrls.length,
+        photoUrls,
+        dataQualityFlag: "ok",
+        fetchedAt,
+      },
+      block,
     });
   }
   return out;
@@ -304,10 +369,10 @@ function parseNum(s: string): number {
   return Number.isFinite(value) ? value : 0;
 }
 
-export function defaultSource(): ScrapeSource {
+export function defaultSource(textModel: ModelConfig | null = null): ScrapeSource {
   const apiKey = process.env.FIRECRAWL_API_KEY;
   if (!apiKey) throw new Error("FIRECRAWL_NOT_CONFIGURED: set FIRECRAWL_API_KEY");
-  return new FirecrawlSource(apiKey, process.env.FIRECRAWL_BASE_URL ?? "https://api.firecrawl.dev/v1");
+  return new FirecrawlSource(apiKey, process.env.FIRECRAWL_BASE_URL ?? "https://api.firecrawl.dev/v1", 3, undefined, textModel);
 }
 
 /**

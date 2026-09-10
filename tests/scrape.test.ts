@@ -11,6 +11,7 @@ import {
   normalize,
   type ScrapeCriteria,
 } from "../worker/scrape.ts";
+import type { ModelConfig } from "../worker/providers.ts";
 
 const CRITERIA: ScrapeCriteria = {
   make: "Toyota",
@@ -273,5 +274,83 @@ describe("normalize on live-scraped rows", () => {
     expect(normalized.excluded).toBe(1);
     expect(normalized.listings.at(-1)?.dataQualityFlag).toBe("duplicate");
     expect(normalized.listings.at(-1)?.duplicateOfAdId).toBe(rows[0].adId);
+  });
+});
+
+describe("FirecrawlSource text-repair (optional model, price/km only)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  // A card missing its price line (the regex path yields price=0).
+  const BROKEN_CARD_MD = `## [SEAT Ibiza 1.0 Reference](https://www.coches.net/seat-ibiza-10-reference-2019-en-madrid-71500001-covo.aspx)
+
+- Gasolina
+- 2019
+- 45.000 km
+- Madrid
+`;
+
+  it("does not call the text model when price/km already parsed cleanly", async () => {
+    let modelCalled = false;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input: any, init: any) => {
+      const url = String(input);
+      if (url.includes("/chat/completions")) {
+        modelCalled = true;
+        return new Response(JSON.stringify({ choices: [{ message: { content: "{}" }, finish_reason: "stop" }] }), { status: 200 });
+      }
+      const body = JSON.parse(String(init.body));
+      const isAdDetail = /-covo\.aspx$/.test(body.url) && !/segunda-mano/.test(body.url);
+      const markdown = isAdDetail ? "# ad" : CATEGORY_MD;
+      return new Response(JSON.stringify({ data: { markdown } }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const textModel: ModelConfig = { provider: "openai_compat", baseUrl: "https://api.openai.test/v1", model: "gpt-4o-mini", apiKey: "sk-test" };
+    const source = new FirecrawlSource("test-key", "https://api.firecrawl.dev/v1", 3, undefined, textModel);
+    const rows = await source.scrape(CRITERIA);
+    expect(rows.every((r) => r.price > 0)).toBe(true); // regex already parsed these cleanly
+    expect(modelCalled).toBe(false);
+  });
+
+  it("repairs a missing price via the text model, reading only the card's own block", async () => {
+    let seenPrompt = "";
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input: any, init: any) => {
+      const url = String(input);
+      if (url.includes("/chat/completions")) {
+        const body = JSON.parse(String(init.body));
+        seenPrompt = body.messages[1].content;
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: JSON.stringify({ price: 6500, km: null }) }, finish_reason: "stop" }] }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+      const body = JSON.parse(String(init.body));
+      const isAdDetail = /-71500001-/.test(body.url) && !/segunda-mano/.test(body.url);
+      const markdown = isAdDetail ? "# ad" : BROKEN_CARD_MD;
+      return new Response(JSON.stringify({ data: { markdown } }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const textModel: ModelConfig = { provider: "openai_compat", baseUrl: "https://api.openai.test/v1", model: "gpt-4o-mini", apiKey: "sk-test" };
+    const source = new FirecrawlSource("test-key", "https://api.firecrawl.dev/v1", 1, undefined, textModel);
+    const rows = await source.scrape({ ...CRITERIA, maxPrice: 0 });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].price).toBe(6500); // repaired from the model
+    expect(rows[0].km).toBe(45000); // regex already had this; model's null must not overwrite it
+    expect(seenPrompt).toContain("45.000 km"); // model only sees the card's own raw block
+  });
+
+  it("keeps the regex (possibly incomplete) listing when the text model call fails", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input: any, init: any) => {
+      const url = String(input);
+      if (url.includes("/chat/completions")) {
+        return new Response("boom", { status: 500 });
+      }
+      const body = JSON.parse(String(init.body));
+      const isAdDetail = /-71500001-/.test(body.url) && !/segunda-mano/.test(body.url);
+      const markdown = isAdDetail ? "# ad" : BROKEN_CARD_MD;
+      return new Response(JSON.stringify({ data: { markdown } }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const textModel: ModelConfig = { provider: "openai_compat", baseUrl: "https://api.openai.test/v1", model: "gpt-4o-mini", apiKey: "sk-test" };
+    const source = new FirecrawlSource("test-key", "https://api.firecrawl.dev/v1", 1, undefined, textModel);
+    const rows = await source.scrape({ ...CRITERIA, maxPrice: 0 });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].price).toBe(0); // repair failed -> stays as regex parsed it (0)
+    expect(rows[0].km).toBe(45000);
   });
 });

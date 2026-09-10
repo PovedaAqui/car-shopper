@@ -5,8 +5,10 @@ import type { ModelConfig } from "../worker/providers.ts";
 
 const VISION_ENV_KEYS = [
   "VISION_PROVIDER",
+  "TEXT_PROVIDER",
   "OPENAI_API_KEY",
   "OPENAI_VISION_MODEL",
+  "OPENAI_TEXT_MODEL",
   "OPENAI_BASE_URL",
   "MODEL_BASE_URL",
   "MODEL_NAME",
@@ -187,5 +189,25 @@ describe("providers", () => {
     expect(visionPrimary.provider).toBe("vllm");
     expect(visionPrimary.visionCapable).toBe(true);
     expect(visionFallback?.provider).toBe("openai_compat"); // openai becomes the secondary
+  });
+
+  it("defaultModels: extraction (text) is OpenAI by default when OPENAI_API_KEY is set", () => {
+    process.env.OPENAI_API_KEY = "sk-test";
+    const { extraction } = defaultModels();
+    expect(extraction.provider).toBe("openai_compat");
+    expect(extraction.model).toBe("gpt-4o-mini");
+    expect(extraction.visionCapable).toBe(false);
+  });
+
+  it("defaultModels: extraction degrades to local when OPENAI_API_KEY is unset", () => {
+    const { extraction } = defaultModels();
+    expect(extraction.provider).toBe("vllm");
+  });
+
+  it("defaultModels: TEXT_PROVIDER=local keeps extraction local even with a valid OPENAI_API_KEY", () => {
+    process.env.OPENAI_API_KEY = "sk-test";
+    process.env.TEXT_PROVIDER = "local";
+    const { extraction } = defaultModels();
+    expect(extraction.provider).toBe("vllm");
   });
 });

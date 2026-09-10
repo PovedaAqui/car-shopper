@@ -120,6 +120,8 @@ from the repo**. `.env.local` / `.env.worker` are git-ignored.
 | `OPENAI_API_KEY` | unset | **Required for the default vision provider.** Without it, vision silently degrades to the local config as primary (still honest `no_evaluable` if that's also not vision-capable) |
 | `OPENAI_VISION_MODEL` | `gpt-4o-mini` | Model id for OpenAI vision |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Override for an OpenAI-compatible vision endpoint |
+| `TEXT_PROVIDER` | `openai` | Primary text-extraction provider: `openai` (default) or `local`. Only invoked when the deterministic regex parse can't find a card's price/km — reads only that card's own text, never invents a number. |
+| `OPENAI_TEXT_MODEL` | `gpt-4o-mini` | Model id for the OpenAI text-repair provider |
 | `FIRECRAWL_API_KEY` | unset | **Required** — Firecrawl runtime key used to scrape coches.net live; never commit it |
 | `FIRECRAWL_BASE_URL` | `https://api.firecrawl.dev/v1` | Optional Firecrawl-compatible endpoint |
 | `FIRECRAWL_MIN_INTERVAL_MS` | `3500` | Client-side pacing between Firecrawl requests (free plan: 20 req/min) |

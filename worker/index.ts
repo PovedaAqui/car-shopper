@@ -11,12 +11,16 @@
  *
  * Env:
  *  MODEL_BASE_URL / MODEL_NAME  local OpenAI-compatible endpoint (vLLM);
- *                               used for text extraction always, and for
- *                               vision only when VISION_PROVIDER=local
+ *                               used for text extraction when
+ *                               TEXT_PROVIDER=local, and for vision when
+ *                               VISION_PROVIDER=local
+ *  TEXT_PROVIDER                openai (default) | local — primary
+ *                               text-extraction (card price/km repair)
+ *                               provider
  *  VISION_PROVIDER              openai (default) | local — which config is
  *                               the primary vision provider
- *  OPENAI_API_KEY               required for the default (openai) vision
- *                               provider
+ *  OPENAI_API_KEY               required for the default (openai) text and
+ *                               vision providers
  *  VISION_MODE                  local_inference_only (default) | local_preferred
  *                               — governs the SECONDARY vision provider only
  *  MODEL_IS_VISION=1            the local served model accepts image inputs
