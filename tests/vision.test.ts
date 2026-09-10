@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import http from "node:http";
-import { runVision } from "../worker/vision.ts";
+import { runVision, defaultMaxPhotosPerCar } from "../worker/vision.ts";
 import type { ModelConfig, Health } from "../worker/providers.ts";
 import type { RawListing } from "../worker/scrape.ts";
 
@@ -111,15 +111,45 @@ describe("runVision maxPhotos", () => {
     }
   });
 
-  it("default (undefined) uses the MAX_PHOTOS_PER_CAR=3 cap", async () => {
+  it("default (undefined) uses the configured MAX_PHOTOS_PER_CAR (default 1) cap", async () => {
     const server = await startServer(3);
     try {
       const out = await runVision([listing("a1", PHOTOS)], mockCfg(server.port), healthy, "local_inference_only");
       const images = server.bodies[0].messages[1].content.filter((p: any) => p.type === "image_url");
-      expect(images).toHaveLength(3);
-      expect(out.primary[0].photosAnalyzed).toBe(3);
+      expect(images).toHaveLength(1);
+      expect(out.primary[0].photosAnalyzed).toBe(1);
     } finally {
       await server.close();
+    }
+  });
+
+  it("defaultMaxPhotosPerCar: falls back to 1 when VISION_MAX_PHOTOS_PER_CAR is unset/invalid", () => {
+    const saved = process.env.VISION_MAX_PHOTOS_PER_CAR;
+    try {
+      delete process.env.VISION_MAX_PHOTOS_PER_CAR;
+      expect(defaultMaxPhotosPerCar()).toBe(1);
+      process.env.VISION_MAX_PHOTOS_PER_CAR = "not-a-number";
+      expect(defaultMaxPhotosPerCar()).toBe(1);
+    } finally {
+      if (saved === undefined) delete process.env.VISION_MAX_PHOTOS_PER_CAR;
+      else process.env.VISION_MAX_PHOTOS_PER_CAR = saved;
+    }
+  });
+
+  it("VISION_MAX_PHOTOS_PER_CAR overrides the default cap used by runVision", async () => {
+    const saved = process.env.VISION_MAX_PHOTOS_PER_CAR;
+    process.env.VISION_MAX_PHOTOS_PER_CAR = "2";
+    const server = await startServer(3);
+    try {
+      expect(defaultMaxPhotosPerCar()).toBe(2);
+      const out = await runVision([listing("a1", PHOTOS)], mockCfg(server.port), healthy, "local_inference_only");
+      const images = server.bodies[0].messages[1].content.filter((p: any) => p.type === "image_url");
+      expect(images).toHaveLength(2);
+      expect(out.primary[0].photosAnalyzed).toBe(2);
+    } finally {
+      await server.close();
+      if (saved === undefined) delete process.env.VISION_MAX_PHOTOS_PER_CAR;
+      else process.env.VISION_MAX_PHOTOS_PER_CAR = saved;
     }
   });
 

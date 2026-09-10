@@ -23,7 +23,8 @@ Pipeline stages:
    sees pass 1) over each listing's **real photos**, fetched by scraping the
    ad's own page (coches.net category pages don't serve gallery images).
    Per-ad photo count is capped by the user's **`maxPhotos`** setting
-   (default 3, `0` = vision explicitly disabled).
+   (default 1, configurable via `VISION_MAX_PHOTOS_PER_CAR` and the
+   frontend's Settings dialog; `0` = vision explicitly disabled).
 5. **Consensus** — deterministic cross-check of the two passes; disagreements
    degrade the score, they are never invented away.
 6. **Report** — self-contained HTML with the source label, vision deltas and
@@ -122,6 +123,7 @@ from the repo**. `.env.local` / `.env.worker` are git-ignored.
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Override for an OpenAI-compatible vision endpoint |
 | `TEXT_PROVIDER` | `openai` | Primary text-extraction provider: `openai` (default) or `local`. Only invoked when the deterministic regex parse can't find a card's price/km — reads only that card's own text, never invents a number. |
 | `OPENAI_TEXT_MODEL` | `gpt-4o-mini` | Model id for the OpenAI text-repair provider |
+| `VISION_MAX_PHOTOS_PER_CAR` | `1` | Default photos-per-ad cap for vision (and photo fetch) when a job doesn't set its own `maxPhotos`. Per-job override via the frontend Settings dialog / `maxPhotos` criteria field. |
 | `FIRECRAWL_API_KEY` | unset | **Required** — Firecrawl runtime key used to scrape coches.net live; never commit it |
 | `FIRECRAWL_BASE_URL` | `https://api.firecrawl.dev/v1` | Optional Firecrawl-compatible endpoint |
 | `FIRECRAWL_MIN_INTERVAL_MS` | `3500` | Client-side pacing between Firecrawl requests (free plan: 20 req/min) |

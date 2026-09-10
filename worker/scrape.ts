@@ -20,6 +20,7 @@
 
 import type { ModelConfig } from "./providers.ts";
 import { chatJson, ProviderError } from "./providers.ts";
+import { defaultMaxPhotosPerCar } from "./vision.ts";
 
 export interface RawListing {
   source: string;
@@ -169,8 +170,9 @@ export class FirecrawlSource implements ScrapeSource {
     }
     // The category page carries no car photos (galleries are lazy-loaded), so
     // fetch each ad's own page to collect its real photo set. Bounded by the
-    // user's maxPhotos setting (default 3): we only fetch what vision analyzes.
-    const photoCap = criteria.maxPhotos && criteria.maxPhotos > 0 ? criteria.maxPhotos : 3;
+    // user's maxPhotos setting (default from VISION_MAX_PHOTOS_PER_CAR, see
+    // vision.ts): we only fetch what vision analyzes.
+    const photoCap = criteria.maxPhotos && criteria.maxPhotos > 0 ? criteria.maxPhotos : defaultMaxPhotosPerCar();
     for (const l of seen.values()) {
       if (criteria.maxPhotos === 0) continue; // vision explicitly off -> no photos needed
       const photos = await this.enrichPhotos(l, photoCap);
@@ -218,7 +220,7 @@ export class FirecrawlSource implements ScrapeSource {
   }
 
   /** Fetch one ad page and return its real vehicle photo URLs (up to the cap). */
-  private async enrichPhotos(listing: RawListing, maxPhotosPerAd = 3): Promise<string[]> {
+  private async enrichPhotos(listing: RawListing, maxPhotosPerAd = defaultMaxPhotosPerCar()): Promise<string[]> {
     try {
       const text = await this.fetchRaw(listing.sourceUrl, ["html", "markdown"]);
       const urls = extractPhotoUrls(text);

@@ -27,8 +27,16 @@ import {
 } from "./providers.ts";
 import type { RawListing } from "./scrape.ts";
 
-export const PROMPT_VERSION = "vision-v3-3photos";
-const MAX_PHOTOS_PER_CAR = 3;
+export const PROMPT_VERSION = "vision-v3";
+/** Default photos-per-car cap when the job doesn't specify maxPhotos.
+ * Configurable via VISION_MAX_PHOTOS_PER_CAR (falls back to 1). Exported so
+ * the scraper's photo-enrichment fetch can share the same default cap.
+ * Evaluated per-call (not cached at module load) so env overrides in tests
+ * and runtime reconfiguration both take effect. */
+export function defaultMaxPhotosPerCar(): number {
+  const n = Number(process.env.VISION_MAX_PHOTOS_PER_CAR);
+  return Number.isInteger(n) && n >= 0 ? n : 1;
+}
 
 const SCHEMA_HINT =
   '{"photos_analyzed": int, "photo_type": "profesional|amateur|sin_fotos|stock_sospechoso", "exterior_state": "bien|regular|mal|no_evaluable", "interior_state": "bien|regular|mal|no_evaluable|sin_ver", "exterior_details": string, "cleanliness": "limpio|regular|descuidado|no_evaluable", "color": string|null, "red_flags": string[]}';
@@ -109,7 +117,7 @@ async function analyzeWithModel(
   if (maxPhotos === 0) {
     return noEvaluable(listing.adId, cfg.provider, cfg.model, step, "inspección visual desactivada por configuración", 0, listing.photoUrls.length > 0);
   }
-  const cap = maxPhotos ?? MAX_PHOTOS_PER_CAR;
+  const cap = maxPhotos ?? defaultMaxPhotosPerCar();
   const photos = listing.photoUrls.slice(0, cap);
   if (photos.length === 0) {
     return noEvaluable(listing.adId, cfg.provider, cfg.model, step, "sin fotos en el anuncio");

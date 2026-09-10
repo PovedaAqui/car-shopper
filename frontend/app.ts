@@ -50,7 +50,7 @@ type LocalSettings = {
   maxPhotos: number;
 };
 
-export const DEFAULT_MAX_PHOTOS = 3;
+export const DEFAULT_MAX_PHOTOS = 1;
 
 function loadSettings(): Partial<LocalSettings> {
   try {
