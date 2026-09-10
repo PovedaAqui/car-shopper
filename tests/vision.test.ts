@@ -165,6 +165,44 @@ describe("runVision maxPhotos", () => {
     }
   });
 
+  it("v4 prompt: never sends price (avoids anchoring 'cheap = worse'), only km/year", async () => {
+    const server = await startServer(3);
+    try {
+      await runVision([listing("a1", PHOTOS)], mockCfg(server.port), healthy, "local_inference_only", 1);
+      const sentText = server.bodies[0].messages[1].content.find((p: any) => p.type === "text").text as string;
+      expect(sentText).not.toMatch(/EUR|€|price/i);
+      expect(sentText).toMatch(/km/i);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("v4 prompt: reverify pass explicitly frames itself as an independent second read, primary as the first", async () => {
+    const server = await startServer(3);
+    try {
+      const out = await runVision([listing("a1", PHOTOS)], mockCfg(server.port), healthy, "local_inference_only", 1);
+      expect(out.primary[0].promptVersion).toBe("vision-v4");
+      const primarySystem = server.bodies[0].messages[0].content as string;
+      const reverifySystem = server.bodies[1].messages[0].content as string;
+      expect(primarySystem).toMatch(/first independent read/i);
+      expect(reverifySystem).toMatch(/independent second read/i);
+      expect(reverifySystem).not.toBe(primarySystem);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("v4 prompt: schema hint asks for cited evidence in exterior_details, not a generic summary", async () => {
+    const server = await startServer(3);
+    try {
+      await runVision([listing("a1", PHOTOS)], mockCfg(server.port), healthy, "local_inference_only", 1);
+      const system = server.bodies[0].messages[0].content as string;
+      expect(system).toMatch(/cite specific visible evidence/i);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("normalizes an English photo_type (e.g. 'professional') back to the Spanish enum, regression for a real prod failure", async () => {
     const server = http.createServer((req, res) => {
       let raw = "";

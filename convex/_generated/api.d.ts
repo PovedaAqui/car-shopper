@@ -9,6 +9,7 @@
  */
 
 import type * as api_ from "../api.js";
+import type * as criteria_lib from "../criteria_lib.js";
 import type * as crons from "../crons.js";
 import type * as email from "../email.js";
 import type * as email_lib from "../email_lib.js";
@@ -26,6 +27,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   api: typeof api_;
+  criteria_lib: typeof criteria_lib;
   crons: typeof crons;
   email: typeof email;
   email_lib: typeof email_lib;

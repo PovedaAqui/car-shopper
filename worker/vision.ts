@@ -27,7 +27,7 @@ import {
 } from "./providers.ts";
 import type { RawListing } from "./scrape.ts";
 
-export const PROMPT_VERSION = "vision-v3";
+export const PROMPT_VERSION = "vision-v4";
 /** Default photos-per-car cap when the job doesn't specify maxPhotos.
  * Configurable via VISION_MAX_PHOTOS_PER_CAR (falls back to 1). Exported so
  * the scraper's photo-enrichment fetch can share the same default cap.
@@ -39,7 +39,7 @@ export function defaultMaxPhotosPerCar(): number {
 }
 
 const SCHEMA_HINT =
-  '{"photos_analyzed": int, "photo_type": "profesional|amateur|sin_fotos|stock_sospechoso", "exterior_state": "bien|regular|mal|no_evaluable", "interior_state": "bien|regular|mal|no_evaluable|sin_ver", "exterior_details": string, "cleanliness": "limpio|regular|descuidado|no_evaluable", "color": string|null, "red_flags": string[]}';
+  '{"photos_analyzed": int, "photo_type": "profesional|amateur|sin_fotos|stock_sospechoso", "exterior_state": "bien|regular|mal|no_evaluable", "interior_state": "bien|regular|mal|no_evaluable|sin_ver", "exterior_details": string (cite specific visible evidence for exterior_state, e.g. \"scratch on rear bumper, curbed front-left wheel\" — not a generic summary), "cleanliness": "limpio|regular|descuidado|no_evaluable", "color": string|null, "red_flags": string[]}';
 
 export interface VisionResult {
   adId: string;
@@ -148,17 +148,53 @@ async function analyzeWithModel(
   }
 
   const system =
-    "You are a used-car inspector. Analyze the ad's photos and respond with strict JSON. " +
-    "Do not invent anything you cannot see: if something is not visible, use 'no_evaluable'. " +
-    "The fields photo_type, exterior_state, interior_state, and cleanliness MUST use exactly one of the Spanish enum values given in the schema (e.g. 'bien', 'regular', 'mal', 'no_evaluable', 'profesional', 'amateur', 'sin_fotos', 'stock_sospechoso', 'limpio', 'descuidado', 'sin_ver') — never translate or invent other values for those fields. " +
-    "Only exterior_details and red_flags are free text: write those two fields in English. " +
+    "You are conducting an independent, evidence-based visual inspection of a used car from its ad photos. " +
+    "Respond with strict JSON matching the given schema. Base every judgment ONLY on what is visible in the " +
+    "photos themselves — never infer condition from the car's price, brand, or age, and never assume a defect " +
+    "or good condition just because it would be 'typical' for a car like this. If something is not visible, " +
+    "not clear enough to judge, or you are not confident, use 'no_evaluable' rather than guessing.\n\n" +
+    "Rate exterior_state with this rubric:\n" +
+    "- 'bien' = no visible damage beyond very light, expected wear (faint stone chips, light wash swirls); " +
+    "paint and panels look consistent.\n" +
+    "- 'regular' = visible cosmetic wear — scratches, small dents, curbed/scuffed wheels, faded or mismatched " +
+    "trim — but nothing suggesting structural or safety-relevant damage.\n" +
+    "- 'mal' = visible dents, rust, cracked bumpers or lights, a body panel with a different paint shade " +
+    "(respray/mismatch), or other signs of a repaired collision.\n" +
+    "- 'no_evaluable' = the photos don't show the exterior clearly enough to judge either way.\n\n" +
+    "Rate interior_state the same three-tier way (upholstery wear, dashboard condition, general trim " +
+    "condition) using ONLY interior photos. Use 'sin_ver' when no interior photo was provided at all — that " +
+    "is different from 'no_evaluable', which means an interior photo exists but is too unclear to judge.\n\n" +
+    "Rate cleanliness ('limpio'/'regular'/'descuidado') from visible dirt, dust, or clutter in the photos — " +
+    "not from assumptions about how the car has been used.\n\n" +
+    "Set photo_type:\n" +
+    "- 'profesional' = dealer/studio-style photos: neutral or plain background, consistent lighting, straight " +
+    "angles.\n" +
+    "- 'amateur' = photos that look taken by a private seller: driveway/street background, inconsistent " +
+    "angles or lighting.\n" +
+    "- 'stock_sospechoso' = the photo looks like a manufacturer/press stock image rather than a photo of the " +
+    "actual car for sale (e.g. a studio background that doesn't fit a private ad, a generic angle, no visible " +
+    "surroundings or plate) — flag this so a stock photo isn't mistaken for evidence about the real car.\n" +
+    "- 'sin_fotos' = no photos were provided.\n\n" +
+    "For red_flags, list ONLY concrete signs of undisclosed damage, poor prior repair, flood/fire damage, " +
+    "structural rust, or a mismatch between the photos and the ad's own text (e.g. the photo shows a " +
+    "different colour or trim than described). Ordinary wear consistent with the car's visible condition is " +
+    "NOT a red flag — do not list it as one.\n\n" +
+    "The fields photo_type, exterior_state, interior_state, and cleanliness MUST use exactly one of the " +
+    "Spanish enum values given in the schema ('bien', 'regular', 'mal', 'no_evaluable', 'profesional', " +
+    "'amateur', 'sin_fotos', 'stock_sospechoso', 'limpio', 'descuidado', 'sin_ver') — never translate or " +
+    "invent other values for those fields. Only exterior_details and red_flags are free text: write those " +
+    "two fields in plain, factual English — no marketing tone, no speculation beyond what the photos show.\n\n" +
     (neutral
-      ? "Work independently: you have no knowledge of any other analysis of this ad."
-      : "");
+      ? "This is an independent second read of these same photos: reach your own conclusion from scratch. " +
+        "Do not assume any other assessment of this car exists, and do not try to match an expected answer."
+      : "This is the first independent read of these photos.");
+  // Note: price is deliberately NOT included below — including it risks
+  // anchoring the model toward "cheap therefore worse" or "expensive
+  // therefore fine" reasoning instead of judging only what's visible.
   const userContent: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [
     {
       type: "text",
-      text: `Listing ${listing.adId}: ${listing.title} (${listing.price} EUR, ${listing.km} km, ${listing.year ?? "?"}). Describe: colour, visible exterior condition (dents, scratches, rust, respraying, bumpers, wheels/tyres), cleanliness, and whether the photo looks professional (neutral background) or amateur. Is there any visible defect or sign of wear/use? If a photo is of the interior, describe the upholstery, seat/steering-wheel wear, cleanliness, and dashboard.`,
+      text: `Listing ${listing.adId}: ${listing.title} (${listing.km} km, year ${listing.year ?? "unknown"}). Apply the rubric above to the photos below.`,
     },
     ...photos.map((u) => ({ type: "image_url" as const, image_url: { url: u } })),
   ];
