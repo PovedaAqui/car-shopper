@@ -40,13 +40,7 @@ const client = new ConvexClient(DEPLOYMENT_URL);
 const SETTINGS_KEY = "car-shopper.local-settings";
 
 type LocalSettings = {
-  visionProvider: string;
-  visionBaseUrl: string;
-  visionModel: string;
-  openrouterKey: string;
-  firecrawlKey: string;
-  useFirecrawl: boolean;
-  /** Photos per ad to analyze: 0 = vision off, >=1 = cap. Default 3. */
+  /** Photos per ad to analyze: 0 = vision off, >=1 = cap. Default 1. */
   maxPhotos: number;
 };
 
@@ -83,12 +77,6 @@ function setupSettings() {
     const data = new FormData(form);
     const maxPhotosRaw = Number(data.get("maxPhotos"));
     const settings: LocalSettings = {
-      visionProvider: String(data.get("visionProvider") ?? "vllm"),
-      visionBaseUrl: String(data.get("visionBaseUrl") ?? ""),
-      visionModel: String(data.get("visionModel") ?? ""),
-      openrouterKey: String(data.get("openrouterKey") ?? ""),
-      firecrawlKey: String(data.get("firecrawlKey") ?? ""),
-      useFirecrawl: data.get("useFirecrawl") === "on",
       maxPhotos: Number.isInteger(maxPhotosRaw) && maxPhotosRaw >= 0 ? maxPhotosRaw : DEFAULT_MAX_PHOTOS,
     };
     sessionStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));

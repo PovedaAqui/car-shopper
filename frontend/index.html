@@ -77,31 +77,15 @@
     <dialog id="settings-dialog" aria-labelledby="settings-title">
       <form method="dialog" class="settings-card" id="settings-form">
         <div class="settings-heading">
-          <div><p class="eyebrow">Local configuration</p><h2 id="settings-title">AI settings</h2></div>
+          <div><p class="eyebrow">Search settings</p><h2 id="settings-title">Settings</h2></div>
           <button class="icon-btn" id="settings-close" type="submit" aria-label="Close settings">×</button>
         </div>
-        <p class="settings-note">These values stay in this browser session. They are never sent to Convex or stored in the app database. The separate local worker still needs matching environment variables.</p>
+        <p class="settings-note">Saved for this browser session and sent with your next search. Vision/text AI provider and the web scraper (Firecrawl, always live — no fixtures) are configured server-side by the worker operator, not per-browser.</p>
         <div class="settings-grid">
-          <label>Vision provider
-            <select name="visionProvider"><option value="vllm">Local vLLM</option><option value="openrouter">OpenRouter</option></select>
-          </label>
-          <label>Vision endpoint
-            <input name="visionBaseUrl" type="url" value="http://localhost:8000/v1" placeholder="https://openrouter.ai/api/v1">
-          </label>
-          <label>Vision model
-            <input name="visionModel" maxlength="160" value="qwen38-27b-unsloth-nvfp4-dflash2" placeholder="qwen/qwen2.5-vl-72b-instruct">
-          </label>
-          <label>OpenRouter API key
-            <input name="openrouterKey" type="password" autocomplete="off" placeholder="sk-or-…">
-          </label>
-          <label>Firecrawl API key
-            <input name="firecrawlKey" type="password" autocomplete="off" placeholder="fc-…">
-          </label>
           <label>Photos per ad to analyze
             <input name="maxPhotos" type="number" min="0" step="1" value="1" placeholder="default: 1">
             <small class="settings-hint">0 = visual inspection off · 1–… = photo cap per ad · default 1</small>
           </label>
-          <label class="settings-check"><input name="useFirecrawl" type="checkbox"> Use Firecrawl scraper</label>
         </div>
         <div class="settings-actions">
           <button type="button" class="secondary-btn" id="settings-clear">Clear local settings</button>
