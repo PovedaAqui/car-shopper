@@ -12,7 +12,7 @@
 - **Auth:** none
 - **AI models:** qwen38-27b-unsloth-nvfp4-dflash2 (local vLLM), Ollama/LM Studio adapters
 - **Started:** 2026-08-26T16:25:21Z
-- **Last updated:** 2026-09-09T08:30:00Z
+- **Last updated:** 2026-09-10T22:00:00Z
 
 ## Log
 
@@ -66,3 +66,61 @@ Removed all fixed inputs from the pipeline: Firecrawl live scrape is now the onl
 
 ### 2026-09-09 - independent production re-verification
 Re-verified the live deployment end-to-end after the fixture removal, in a fresh session: `npm test` (38/38), `npx tsc --noEmit`, and `npm run build` all pass clean; `git status` clean with local HEAD matching `origin/main`; `npx convex function-spec` confirms 26 deployed functions (a real push, not a stale deploy). Ran the local worker against the prod deployment twice with different search criteria — Toyota Yaris (≤€8000, Barcelona) via the public form, and Seat Ibiza (≤€6000, Madrid) via a fresh `userId` through `npx convex run api:create` — both scraped real coches.net listings live (8 and 16 respectively), ranked them, and produced a genuine HTML report served from Convex File Storage. Confirmed the free-tier limit is scoped per `userId`, not global: the second search under the *original* `userId` was correctly rejected with the friendly "free search already used" message, while the fresh `userId` succeeded. Vision remains honestly `no_evaluable` in this environment (text-only local model), as designed. No secrets exposed in the process.
+
+### 2026-09-10 - cloud-default vision/text, maxPhotos=1, English UI, minYear filter
+
+Made OpenAI the **default** provider for both vision and text extraction
+(previously local-first with an OpenAI fallback) — `VISION_PROVIDER`/
+`TEXT_PROVIDER` env vars, default `openai`, local vLLM/Ollama/LM Studio
+becomes an explicit opt-in via `VISION_PROVIDER=local`/`TEXT_PROVIDER=local`.
+Added a real LLM use for text extraction (`worker/scrape.ts`
+`parseCategoryCardsRaw` + a repair call for cards missing price/km, reading
+only that card's own markdown, never inventing a number). Report titles now
+link to the original coches.net listing. Made vision's per-ad photo cap
+(`maxPhotos`) explicitly configurable with a default of **1** (was an
+implicit 3), refactored from a load-time constant to
+`defaultMaxPhotosPerCar()` so `VISION_MAX_PHOTOS_PER_CAR` overrides are
+testable. Removed 6 dead fields from the frontend Settings dialog
+(visionProvider/visionBaseUrl/visionModel/openrouterKey/firecrawlKey/
+useFirecrawl) that nothing in the real pipeline ever read — kept only
+`maxPhotos`. Translated all remaining Spanish user-facing text to English:
+the generated HTML report (`worker/report.ts`), the exclusion reason shown
+in that report, the live scrape-source label, dashboard status strings, and
+the vision model's own free-text output (system/user prompt in
+`worker/vision.ts` rewritten to English so `red_flags`/`exterior_details`
+come back in English too — the fixed enum vocabulary the pipeline depends
+on internally, e.g. `bien/regular/mal/no_evaluable`, was deliberately left
+unchanged to avoid touching scoring/consensus/tests).
+
+Production incident (real, not simulated): the first job after the vision
+prompt rewrite failed with `ArgumentValidationError` — gpt-4o-mini returned
+`photo_type: "professional"` (English) instead of the required Spanish enum
+value, apparently over-generalizing the "write free-text fields in English"
+instruction to the fixed enum field too. Root-caused via the worker log and
+the Convex error, fixed by adding `normPhotoType()` — the same
+defensive normalize-or-fallback pattern already used for
+`exterior_state`/`interior_state`/`cleanliness` — instead of trusting the
+model to always honor a prompt-level enum constraint. Re-ran the identical
+search live after the fix; it completed cleanly. Added a regression test
+(`tests/vision.test.ts`) asserting an English `photo_type` value from the
+mock model gets normalized instead of causing a downstream validation
+failure.
+
+Added an optional `minYear` search criterion end to end: frontend form field
+(1980-2030), `convex/schema.ts` + `convex/api.ts` validator
+(`YEAR_OUT_OF_RANGE` rejection code, folded into `hashCriteria` so it
+participates in the idempotency key), `worker/scrape.ts` post-parse filter
+(listings below the cutoff dropped, listings with an unparseable year always
+kept — coches.net's URL-level year filtering was not verified live, unlike
+`maxPrice`, so this is implemented as a client-side filter rather than a URL
+query param), `worker/report.ts` meta line, `--local` mode's `LOCAL_MIN_YEAR`
+env var. New test in `tests/scrape.test.ts` against the existing
+`CATEGORY_MD` fixture confirms a `minYear: 2015` search keeps a 2016 card and
+drops a 2014 card.
+
+Verified live against `glorious-monitor-400` throughout: 57/57 tests, clean
+typecheck/build, `npx convex deploy` (26 functions) +
+`npx @convex-dev/static-hosting deploy` after every change, and real
+end-to-end jobs — Citroen C3/Valencia (photo_type fix), Volkswagen
+Polo/Sevilla with `minYear: 2015` (2 ranked from 3 scraped, correctly kept a
+2017 and a 2015 listing, report showed "2015+" in the meta line).

@@ -3,7 +3,7 @@
 Async car-comparison web app built for the **Convex All Gas Hackathon**.
 
 A user submits search criteria (make, model, max price, region, optional max
-km). A **local worker** runs a staged pipeline and writes every transition back
+km, optional minimum year). A **local worker** runs a staged pipeline and wri...[truncated]
 to **Convex**, where the dashboard updates **in realtime** via subscriptions.
 The finished report can be viewed in the dashboard or **emailed to any
 address as an HTML body** (via AgentMail, never as an attachment).
@@ -132,8 +132,8 @@ from the repo**. `.env.local` / `.env.worker` are git-ignored.
 | `AGENTMAIL_WEBHOOK_SECRET` | unset | Optional; bounce webhook at `/api/agentmail/webhook` |
 
 `--local` one-shot criteria: `LOCAL_MAKE` (Toyota), `LOCAL_MODEL` (Yaris),
-`LOCAL_MAX_PRICE` (5000), `LOCAL_REGION` (Barcelona). No other hardcoded
-criteria exist in the codebase.
+`LOCAL_MAX_PRICE` (5000), `LOCAL_REGION` (Barcelona), `LOCAL_MIN_YEAR`
+(unset = no year filter). No other hardcoded criteria exist in the codebase.
 
 ### Firecrawl rate limits
 
@@ -159,6 +159,32 @@ than hiding it.
 
 The production deployment (`glorious-monitor-400`) has `WORKER_API_KEY` set;
 the dev opt-in is closed there. Confirm with `npx convex env list`.
+
+## Optional search filters
+
+- **Max km** and **minimum year** are both optional, per-job criteria (not
+  worker env vars) — set from the frontend form or passed directly to
+  `api:create`. Both are validated server-side (`convex/api.ts`): `minYear`
+  must be an integer in `1980..2030` (rejected with `YEAR_OUT_OF_RANGE`
+  otherwise).
+- `minYear` is applied as a **client-side post-parse filter** in
+  `worker/scrape.ts`, not a verified coches.net URL query parameter (unlike
+  `maxPrice`, which is a confirmed URL param) — listings below the cutoff are
+  dropped, but a listing whose year couldn't be parsed is always **kept**
+  (the pipeline never excludes on data it doesn't have). Both `maxKm` and
+  `minYear` are folded into the job's idempotency-key hash, so two searches
+  that differ only by one of these fields never collide.
+
+## Language
+
+All user-facing text (frontend UI, the generated HTML report, the vision
+model's free-text fields — `red_flags`/`exterior_details`/etc.) defaults to
+**English**. The vision provider's fixed enum fields (`photo_type`,
+`exterior_state`, `interior_state`, `cleanliness`) are normalized
+defensively in `worker/vision.ts` regardless of what language the model
+happens to answer in — this exists because an OpenAI-compatible model can
+ignore prompt-level enum instructions (see the 2026-09-10 postmortem in
+`hackathon.md`).
 
 ## What is intentionally NOT in this build
 
@@ -198,17 +224,39 @@ two independent searches (different criteria, no shared state):
   scoped per user, not global): 16 real listings ranked, 0 excluded,
   completed in ~2 min.
 
+2026-09-10, worker run against `glorious-monitor-400`, after moving vision +
+text extraction to OpenAI-by-default, capping vision to 1 photo/car by
+default, translating the report/UI to English, and adding the optional
+`minYear` filter:
+
+- **Citroen C3, ≤ €6500, Valencia** — first attempt failed in prod
+  (`ArgumentValidationError`): the vision model returned `photo_type:
+  "professional"` (English) against a Spanish-only enum validator, an
+  unintended side effect of an English-language instruction in the vision
+  prompt. Fixed by normalizing `photoType` defensively in `worker/vision.ts`
+  (same pattern already used for the other three enum fields) instead of
+  relying on the model to honor the enum. Re-ran the identical search —
+  completed cleanly.
+- **Volkswagen Polo, ≤ €9000, Sevilla, minYear 2015** — 3 scraped, 1
+  excluded (duplicate ad), 2 ranked (a 2017 and a 2015 listing — confirms
+  the `minYear` filter dropped older cards without dropping cards it
+  couldn't parse a year from). Report meta line correctly showed "2015+".
+
 Both reports were genuine HTML files served from Convex File Storage;
-vision was honestly `0/N evaluable` in both runs (the configured local
-vLLM model is text-only in this environment, as documented above).
+vision was honestly `0/N evaluable` in the 2026-09-09 runs (the configured
+local vLLM model is text-only in this environment, as documented above) and
+evaluable via `openai_compat/gpt-4o-mini` in the 2026-09-10 runs (OpenAI is
+now the default vision provider).
 
 ## Tests
 
-`npm test` runs the Vitest suite (38 tests, all green): live Firecrawl card
-parsing (incl. `€/mes` financing-line handling, photo host filtering,
-pagination, 429 retry, request pacing), normalize/dedup on synthetic live-card
-rows, deterministic scoring, provider selection + health/auth header +
-vLLM-vs-OpenAI body compatibility, `maxPhotos` vision behavior against a
-mock OpenAI-compatible server, consensus resolution, report rendering, the
-pipeline end-to-end with a stubbed Convex client, and the email helpers
-(normalization, validation, hashing, HTML→text, idempotency keys).
+`npm test` runs the Vitest suite (57 tests, all green, 9 files): live
+Firecrawl card parsing (incl. `€/mes` financing-line handling, photo host
+filtering, pagination, 429 retry, request pacing, `minYear` filtering),
+normalize/dedup on synthetic live-card rows, deterministic scoring, provider
+selection + health/auth header + vLLM-vs-OpenAI body compatibility,
+`maxPhotos` vision behavior against a mock OpenAI-compatible server
+(including `photo_type` normalization for out-of-enum model responses),
+consensus resolution, report rendering, the pipeline end-to-end with a
+stubbed Convex client, and the email helpers (normalization, validation,
+hashing, HTML→text, idempotency keys).
