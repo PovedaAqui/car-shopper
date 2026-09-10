@@ -3,8 +3,10 @@
 Async car-comparison web app built for the **Convex All Gas Hackathon**.
 
 A user submits search criteria (make, model, max price, region, optional max
-km, optional minimum year). A **local worker** runs a staged pipeline and wri...[truncated]
-to **Convex**, where the dashboard updates **in realtime** via subscriptions.
+km, optional minimum year). Job creation schedules a **Convex Node action**
+that runs the staged pipeline directly inside the deployment — no external
+worker process to keep alive — writing every transition back to the same
+job document, so the dashboard updates **in realtime** via subscriptions.
 The finished report can be viewed in the dashboard or **emailed to any
 address as an HTML body** (via AgentMail, never as an attachment).
 
@@ -45,14 +47,16 @@ reports `no_evaluable` — the pipeline never invents or substitutes data.
 ## Stack
 
 - **Backend / source of truth**: Convex (schema + collections, public +
-  internal queries/mutations, actions, crons, realtime subscriptions, File
-  Storage).
+  internal queries/mutations, a Node-runtime action running the pipeline,
+  crons, realtime subscriptions, File Storage).
 - **Frontend**: static site (vanilla TS, `frontend/`) built to `dist/` and
   served by the official `@convex-dev/static-hosting` component →
   `*.convex.site`.
-- **Worker**: a plain Node/TS process (`worker/`) that polls Convex for
-  `queued` jobs, runs the pipeline, and writes results back through an
-  authenticated Convex HTTP API.
+- **Pipeline runner**: `convex/pipelineAction.ts`, a Convex action with
+  `"use node"` scheduled automatically by `api.create` — runs the exact same
+  pipeline code as before (`worker/pipeline.ts`, unmodified) but *inside*
+  the Convex deployment instead of on an external always-on host. No
+  process needs to be kept running anywhere for production to work.
 - **Vision**: any **OpenAI-compatible** endpoint — local vLLM (default
   `http://localhost:8000/v1`), or a remote API such as
   `https://api.openai.com/v1`. The provider kind is **inferred from the host**:
@@ -67,12 +71,17 @@ reports `no_evaluable` — the pipeline never invents or substitutes data.
 ## Layout
 
 ```
-convex/            Convex backend (schema, public + internal functions, crons,
-                   HTTP router, email + email_send actions, AgentMail webhook)
+convex/            Convex backend (schema, public + internal functions,
+                   pipelineAction.ts running the pipeline in-Convex, crons,
+                   HTTP router — now legacy, kept for --local dev — email +
+                   email_send actions, AgentMail webhook)
 frontend/          Static frontend sources (dashboard, form, report view,
                    email form, session settings incl. maxPhotos)
-worker/            Local pipeline worker (scrape, providers, stages, report,
-                   convex client)
+worker/            Pipeline library (scrape, providers, stages, report) —
+                   imported directly by convex/pipelineAction.ts in
+                   production; worker/index.ts's --local mode remains for
+                   one-shot local dev runs against a self-hosted Convex
+                   instance
 tests/             Vitest unit tests (scrape, normalize, scoring, providers,
                    vision, pipeline, consensus, report, email)
 scripts/           Build helpers (frontend → dist/)
@@ -241,6 +250,18 @@ default, translating the report/UI to English, and adding the optional
   excluded (duplicate ad), 2 ranked (a 2017 and a 2015 listing — confirms
   the `minYear` filter dropped older cards without dropping cards it
   couldn't parse a year from). Report meta line correctly showed "2015+".
+
+2026-09-10 (later), moved the pipeline to run **inside Convex** as a
+Node-runtime action (`convex/pipelineAction.ts`) scheduled by `api.create`,
+replacing the external polling worker entirely — production no longer
+depends on any process running on a laptop, VPS, or any other host:
+
+- **Seat Ibiza, ≤ €7000, Madrid** — created via `npx convex run api:create`
+  with NO worker process running anywhere. Job status was `"claimed"`
+  immediately (auto-scheduled), progressed scraping → vision → completed on
+  its own, 26 real coches.net listings ranked, report served from Convex
+  File Storage. Confirmed via the public browser form too: submission
+  correctly enforced the daily free-tier limit for an already-used `userId`.
 
 Both reports were genuine HTML files served from Convex File Storage;
 vision was honestly `0/N evaluable` in the 2026-09-09 runs (the configured

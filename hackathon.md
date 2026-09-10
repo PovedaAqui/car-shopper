@@ -12,7 +12,7 @@
 - **Auth:** none
 - **AI models:** qwen38-27b-unsloth-nvfp4-dflash2 (local vLLM), Ollama/LM Studio adapters
 - **Started:** 2026-08-26T16:25:21Z
-- **Last updated:** 2026-09-10T22:00:00Z
+- **Last updated:** 2026-09-10T23:45:00Z
 
 ## Log
 
@@ -124,3 +124,43 @@ typecheck/build, `npx convex deploy` (26 functions) +
 end-to-end jobs — Citroen C3/Valencia (photo_type fix), Volkswagen
 Polo/Sevilla with `minYear: 2015` (2 ranked from 3 scraped, correctly kept a
 2017 and a 2015 listing, report showed "2015+" in the meta line).
+
+### 2026-09-10 - pipeline moved inside Convex, worker no longer required
+
+User instruction: "the production version should be always running", then
+"the production version shouldn't live in local" — the external polling
+worker (`worker/index.ts`) meant production depended on a process running
+somewhere always-on outside Convex; a local systemd unit was tried and
+explicitly rejected by the user for that reason.
+
+Moved the entire pipeline to run **inside Convex** as a Node-runtime action:
+`convex/pipelineAction.ts` (new file, `"use node"`) imports
+`worker/pipeline.ts` **unmodified** and calls it directly, wiring its
+progress callbacks straight to the existing internal mutations
+(`updateStage`/`insertListings`/`insertScores`/`insertVisionResults`/
+`insertConsensus`/`createReport`) via `ctx.runMutation`/`ctx.runQuery`
+instead of the old authenticated HTTP worker API. `api.create` now inserts
+each job pre-claimed with its own `workerToken` and calls
+`ctx.scheduler.runAfter(0, internal.pipelineAction.run, ...)` immediately,
+instead of leaving it `queued` for an external poller to pick up.
+`convex/tsconfig.json` gained `allowImportingTsExtensions` so it can
+typecheck the `worker/*.ts` imports (which keep explicit `.ts` extensions
+because they're also runnable directly via `node
+--experimental-strip-types` for the `--local` one-shot dev mode).
+`FIRECRAWL_API_KEY`, `OPENAI_API_KEY`, `OPENAI_VISION_MODEL`,
+`OPENAI_TEXT_MODEL`, `VISION_PROVIDER`, `TEXT_PROVIDER`, `VISION_MODE`, and
+`VISION_MAX_PHOTOS_PER_CAR` were moved into the Convex deployment's own
+environment (`npx convex env set`) so the in-Convex action can read them.
+
+Verified live with genuinely no worker process running anywhere (checked
+via `ps aux`): a job created through `npx convex run api:create` (Seat
+Ibiza, ≤ €7000, Madrid) showed status `"claimed"` immediately (proving the
+scheduler fired), progressed scraping → vision → completed entirely on its
+own, scraped 26 real coches.net listings, ranked them, and produced a
+genuine HTML report served from Convex File Storage. Also re-verified
+through the public browser form that the daily free-tier limit is still
+correctly enforced. 57/57 tests pass unchanged (the pipeline code itself
+was not touched, only how it's invoked); `tsc --noEmit` clean in both the
+root and `convex/` tsconfigs. `worker/index.ts`/`worker/convex_client.ts`
+are now dead code for production (kept only for `--local` one-shot dev runs
+against a self-hosted Convex instance).
