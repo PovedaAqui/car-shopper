@@ -345,6 +345,17 @@ rejections (input validation hardening):
   report titled "Citroën DS 3 ≤ €5500" with the accent preserved correctly
   throughout.
 
+2026-09-11 (later), after refining the vision prompt (explicit rubric,
+price removed to avoid anchoring, cited-evidence schema hint,
+PROMPT_VERSION bumped vision-v3 -> vision-v4):
+
+- **Volkswagen Golf, ≤ €6000, Sevilla** — created via `npx convex run
+  api:create`, completed end-to-end (22 real listings scraped and ranked).
+  Vision ran via `openai_compat/gpt-4o-mini` on multiple listings with
+  `consenso` badges (both independent passes agreed), valid enum values
+  for exterior state/cleanliness/colour — confirms the refined prompt
+  still produces schema-compliant, sensible output in production.
+
 Both reports were genuine HTML files served from Convex File Storage;
 vision was honestly `0/N evaluable` in the 2026-09-09 runs (the configured
 local vLLM model is text-only in this environment, as documented above) and
@@ -353,7 +364,7 @@ now the default vision provider).
 
 ## Tests
 
-`npm test` runs the Vitest suite (73 tests, all green, 10 files): live
+`npm test` runs the Vitest suite (76 tests, all green, 10 files): live
 Firecrawl card parsing (incl. `€/mes` financing-line handling, photo host
 filtering, pagination, 429 retry, request pacing, `minYear` filtering,
 defensive URL-encoding), normalize/dedup on synthetic live-card rows,

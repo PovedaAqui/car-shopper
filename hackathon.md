@@ -12,7 +12,7 @@
 - **Auth:** none
 - **AI models:** qwen38-27b-unsloth-nvfp4-dflash2 (local vLLM), Ollama/LM Studio adapters
 - **Started:** 2026-08-26T16:25:21Z
-- **Last updated:** 2026-09-11T00:45:00Z
+- **Last updated:** 2026-09-11T01:00:00Z
 
 ## Log
 
@@ -261,3 +261,48 @@ values (`"Citroën"` / `"DS 3"` / region `"Zaragoza"`) was correctly
 accepted, ran end-to-end (19 real coches.net listings scraped and ranked),
 and produced a genuine report titled "Citroën DS 3 ≤ €5500" — confirming
 the new charset restriction doesn't block real car names/regions.
+
+### 2026-09-11 (continued) - refined the vision prompt (rubric, no price anchoring)
+
+User asked what "two independent visual inspections" means in practice
+(answered: two separate model calls over the same photos, the reverify
+pass has no knowledge of the primary result, and `worker/consensus.ts`
+takes the more severe state on disagreement rather than averaging), then
+asked to refine the prompts.
+
+Rewrote `worker/vision.ts`'s system prompt (`PROMPT_VERSION` bumped
+`vision-v3` -> `vision-v4`): added an explicit three-tier rubric for
+`exterior_state` with concrete criteria per tier instead of leaving the
+"bien/regular/mal" boundary entirely to the model's judgement; removed
+`price` from the vision request entirely (was previously sent alongside
+km/year) since including it risked anchoring the model toward "cheap
+therefore worse"/"expensive therefore fine" reasoning instead of judging
+only the photos; clarified `sin_ver` (no interior photo exists) vs
+`no_evaluable` (a photo exists but is too unclear to judge), which were
+easy to conflate before; expanded `photo_type` guidance with concrete
+criteria per value, especially `stock_sospechoso` (distinguishing a real
+seller's amateur photo from a manufacturer/press stock image); scoped
+`red_flags` explicitly to concrete signs of undisclosed damage/poor
+repair/flood-fire damage/structural rust/photo-vs-ad-text mismatch —
+ordinary wear must NOT be listed as a red flag; `SCHEMA_HINT`'s
+`exterior_details` now asks for cited, specific evidence ("scratch on rear
+bumper, curbed front-left wheel") instead of a generic summary, so the
+stated `exterior_state` has a visible paper trail; made the primary/
+reverify framing more explicit and asymmetric ("first independent read" vs
+"independent second read... don't try to match an expected answer") to
+strengthen the actual independence the consensus design depends on.
+
+Added 3 regression tests (`tests/vision.test.ts`) confirming price is
+never sent, the primary/reverify system prompts differ with the expected
+framing language, and the schema hint asks for cited evidence. 76/76 tests
+passing (3 new), `tsc --noEmit` clean, `npm run build` clean. No
+schema/API changes — the `PROMPT_VERSION` bump is purely informational
+(stored per vision result row).
+
+Deployed (`npx convex deploy`) and verified live against
+`glorious-monitor-400`: Volkswagen Golf, ≤ €6000, Sevilla — completed
+end-to-end (22 real listings scraped and ranked), vision ran via
+`openai_compat/gpt-4o-mini` on multiple listings with `consenso` badges
+(both independent passes agreed) and valid enum values throughout,
+confirming the refined prompt still produces schema-compliant output in
+production.
