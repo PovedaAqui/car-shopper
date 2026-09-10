@@ -131,7 +131,7 @@ export async function runPipeline(
     if (model && health === undefined) {
       health = await checkHealth(model);
     }
-    vision = await runVision(listings, model, health ?? null, mode, criteria.maxPhotos);
+    vision = await runVision(listings, model, health ?? null, mode, criteria.maxPhotos, models.visionFallback);
     const primaryRows = vision.primary.map((v) => toVisionRow(v));
     const reverifyRows = vision.reverify.map((v) => toVisionRow(v));
     await progress.onVision([...primaryRows, ...reverifyRows]);

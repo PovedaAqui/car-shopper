@@ -176,13 +176,15 @@ export async function runVision(
   cfg: ModelConfig | null,
   health: Health | null,
   mode: "local_inference_only" | "local_preferred",
-  maxPhotos?: number
+  maxPhotos?: number,
+  cloudFallback: ModelConfig | null = null
 ): Promise<VisionOutcome> {
   const { cfg: active, decision } = selectProvider(
     mode,
     cfg ?? { provider: "vllm", baseUrl: "", model: "" },
     health ?? { ok: false, baseUrl: "", model: "" },
-    null
+    cloudFallback,
+    /* requireVision */ true
   );
 
   if (!active || !decision || active.visionCapable !== true) {

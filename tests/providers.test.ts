@@ -30,6 +30,41 @@ describe("providers", () => {
     expect(decision.decision?.fallbackReason).toBe("oom");
   });
 
+  it("stays on a healthy but non-vision local model when requireVision is not set", () => {
+    const decision = selectProvider(
+      "local_preferred",
+      { provider: "vllm", baseUrl: "http://localhost:8000/v1", model: "local-text", visionCapable: false },
+      { ok: true, baseUrl: "http://localhost:8000/v1", model: "local-text" },
+      { provider: "openai_compat", baseUrl: "https://api.openai.com/v1", model: "cloud-vision", visionCapable: true }
+    );
+    expect(decision.cfg?.model).toBe("local-text");
+    expect(decision.decision?.fallbackUsed).toBe(false);
+  });
+
+  it("falls back to cloud vision when the local model is healthy but not vision-capable and requireVision=true", () => {
+    const decision = selectProvider(
+      "local_preferred",
+      { provider: "vllm", baseUrl: "http://localhost:8000/v1", model: "local-text", visionCapable: false },
+      { ok: true, baseUrl: "http://localhost:8000/v1", model: "local-text" },
+      { provider: "openai_compat", baseUrl: "https://api.openai.com/v1", model: "cloud-vision", visionCapable: true },
+      /* requireVision */ true
+    );
+    expect(decision.cfg?.model).toBe("cloud-vision");
+    expect(decision.decision?.fallbackUsed).toBe(true);
+    expect(decision.decision?.fallbackReason).toMatch(/not vision-capable/);
+  });
+
+  it("does not fall back to vision-only cloud when local_inference_only, even with requireVision", () => {
+    const decision = selectProvider(
+      "local_inference_only",
+      { provider: "vllm", baseUrl: "http://localhost:8000/v1", model: "local-text", visionCapable: false },
+      { ok: true, baseUrl: "http://localhost:8000/v1", model: "local-text" },
+      { provider: "openai_compat", baseUrl: "https://api.openai.com/v1", model: "cloud-vision", visionCapable: true },
+      /* requireVision */ true
+    );
+    expect(decision.cfg).toBeNull();
+  });
+
   it("providerFor: local endpoints infer vllm, remote APIs infer openai_compat, explicit wins", () => {
     expect(providerFor("http://localhost:8000/v1")).toBe("vllm");
     expect(providerFor("http://127.0.0.1:11434/v1")).toBe("vllm");

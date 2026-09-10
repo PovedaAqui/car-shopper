@@ -115,7 +115,10 @@ from the repo**. `.env.local` / `.env.worker` are git-ignored.
 | `VISION_PRIMARY_BASE_URL` | `MODEL_BASE_URL` | Vision endpoint override — local **or** remote OpenAI-compatible (e.g. `https://api.openai.com/v1`) |
 | `VISION_PRIMARY_MODEL` | `MODEL_NAME` | Vision model identifier |
 | `VISION_PRIMARY_PROVIDER` | inferred from host | Explicit provider kind (`vllm` / `openai_compat` / `ollama` / `lmstudio`) |
-| `OPENROUTER_API_KEY` | unset | Runtime key for the vision endpoint when it needs one (e.g. a remote OpenAI-compatible API) |
+| `VISION_PRIMARY_API_KEY` | unset | Runtime key for the vision endpoint when it needs one (e.g. a remote OpenAI-compatible API) |
+| `OPENAI_API_KEY` | unset | Enables the optional cloud vision **fallback** — only used when `VISION_MODE=local_preferred` and the local model is down or not vision-capable; never contacted in `local_inference_only` |
+| `OPENAI_VISION_MODEL` | `gpt-4o-mini` | Model id for the OpenAI vision fallback |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Override for an OpenAI-compatible fallback endpoint |
 | `FIRECRAWL_API_KEY` | unset | **Required** — Firecrawl runtime key used to scrape coches.net live; never commit it |
 | `FIRECRAWL_BASE_URL` | `https://api.firecrawl.dev/v1` | Optional Firecrawl-compatible endpoint |
 | `FIRECRAWL_MIN_INTERVAL_MS` | `3500` | Client-side pacing between Firecrawl requests (free plan: 20 req/min) |

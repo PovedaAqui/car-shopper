@@ -137,9 +137,29 @@ export function defaultModels(): {
       maxTokens: 2048,
       disableThinking: true,
       visionCapable: process.env.MODEL_IS_VISION === "1",
-      apiKey: process.env.OPENROUTER_API_KEY,
+      apiKey: process.env.VISION_PRIMARY_API_KEY,
     },
-    visionFallback: null,
+    visionFallback: openaiVisionFallback(),
+  };
+}
+
+/**
+ * Optional cloud vision fallback (OpenAI). Only built when OPENAI_API_KEY is
+ * set — used exclusively in VISION_MODE=local_preferred when the local model
+ * is unhealthy or is not vision-capable. Never used silently in
+ * local_inference_only mode (no cloud egress in that mode).
+ */
+function openaiVisionFallback(): ModelConfig | null {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
+  return {
+    provider: "openai_compat",
+    baseUrl: process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1",
+    model: process.env.OPENAI_VISION_MODEL ?? "gpt-4o-mini",
+    temperature: 0,
+    maxTokens: 2048,
+    visionCapable: true,
+    apiKey,
   };
 }
 
@@ -314,12 +334,17 @@ export function selectProvider(
   mode: "local_inference_only" | "local_preferred",
   local: ModelConfig,
   localHealthy: Health,
-  cloud: ModelConfig | null
+  cloud: ModelConfig | null,
+  requireVision = false
 ): { cfg: ModelConfig | null; decision: RouterDecision | null } {
-  if (localHealthy.ok) {
+  const localUsable = localHealthy.ok && (!requireVision || local.visionCapable === true);
+  if (localUsable) {
     return { cfg: local, decision: { provider: local.provider, baseUrl: local.baseUrl, model: local.model, fallbackUsed: false } };
   }
   if (mode === "local_preferred" && cloud) {
+    const reason = !localHealthy.ok
+      ? (localHealthy.detail ?? "local model unavailable")
+      : "local model is not vision-capable (set MODEL_IS_VISION=1 if it is)";
     return {
       cfg: cloud,
       decision: {
@@ -327,7 +352,7 @@ export function selectProvider(
         baseUrl: cloud.baseUrl,
         model: cloud.model,
         fallbackUsed: true,
-        fallbackReason: localHealthy.detail ?? "local model unavailable",
+        fallbackReason: reason,
       },
     };
   }

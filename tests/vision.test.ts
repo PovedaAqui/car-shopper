@@ -134,4 +134,104 @@ describe("runVision maxPhotos", () => {
       await server.close();
     }
   });
+
+  it("routes to the OpenAI cloud fallback when local is text-only and mode=local_preferred", async () => {
+    const server = await startServer(3);
+    let seenAuth: string | null = null;
+    let seenBody: any = null;
+    const cloudServer = http.createServer((req, res) => {
+      seenAuth = req.headers.authorization ?? null;
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      req.on("end", () => {
+        seenBody = JSON.parse(raw || "{}");
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    photos_analyzed: 3,
+                    photo_type: "profesional",
+                    exterior_state: "bien",
+                    interior_state: "no_evaluable",
+                    cleanliness: "limpio",
+                    color: "azul",
+                    red_flags: [],
+                  }),
+                },
+                finish_reason: "stop",
+              },
+            ],
+            usage: { prompt_tokens: 5, completion_tokens: 5 },
+          })
+        );
+      });
+    });
+    await new Promise<void>((r) => cloudServer.listen(0, "127.0.0.1", () => r()));
+    const cloudPort = (cloudServer.address() as any).port;
+    const textOnlyLocal: ModelConfig = { ...mockCfg(server.port), visionCapable: false };
+    const cloudFallback: ModelConfig = {
+      provider: "openai_compat",
+      baseUrl: `http://127.0.0.1:${cloudPort}/v1`,
+      model: "gpt-4o-mini",
+      visionCapable: true,
+      apiKey: "sk-test-secret",
+    };
+    try {
+      const out = await runVision(
+        [listing("a1", PHOTOS)],
+        textOnlyLocal,
+        healthy,
+        "local_preferred",
+        undefined,
+        cloudFallback
+      );
+      expect(server.bodies).toHaveLength(0); // never called the text-only local model
+      expect(seenAuth).toBe("Bearer sk-test-secret");
+      expect(seenBody.chat_template_kwargs).toBeUndefined(); // openai_compat must not send vLLM-only fields
+      expect(out.primary[0].provider).toBe("openai_compat");
+      expect(out.primary[0].exteriorState).toBe("bien");
+      expect(out.providerLabel).toMatch(/fallback/);
+    } finally {
+      await server.close();
+      await new Promise<void>((r) => cloudServer.close(() => r()));
+    }
+  });
+
+  it("never calls the cloud fallback in local_inference_only even when local is text-only", async () => {
+    const server = await startServer(3);
+    let cloudCalled = false;
+    const cloudServer = http.createServer((_req, res) => {
+      cloudCalled = true;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: "{}" }, finish_reason: "stop" }] }));
+    });
+    await new Promise<void>((r) => cloudServer.listen(0, "127.0.0.1", () => r()));
+    const cloudPort = (cloudServer.address() as any).port;
+    const textOnlyLocal: ModelConfig = { ...mockCfg(server.port), visionCapable: false };
+    const cloudFallback: ModelConfig = {
+      provider: "openai_compat",
+      baseUrl: `http://127.0.0.1:${cloudPort}/v1`,
+      model: "gpt-4o-mini",
+      visionCapable: true,
+      apiKey: "sk-test-secret",
+    };
+    try {
+      const out = await runVision(
+        [listing("a1", PHOTOS)],
+        textOnlyLocal,
+        healthy,
+        "local_inference_only",
+        undefined,
+        cloudFallback
+      );
+      expect(cloudCalled).toBe(false);
+      expect(out.primary[0].exteriorState).toBe("no_evaluable");
+    } finally {
+      await server.close();
+      await new Promise<void>((r) => cloudServer.close(() => r()));
+    }
+  });
 });
