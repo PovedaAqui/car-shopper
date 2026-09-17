@@ -17,7 +17,14 @@ Pipeline stages:
    (`coches.net/{make}/{model}/segunda-mano/{region}/?maxPrice=…&pg=N`, up to 3
    pages). Card fields (price, km, year, fuel, warranty, pro badge) are parsed
    from the markdown; the financing line (`€/mes`) is deliberately ignored and
-   the card's own price line wins.
+   the card's own price line wins. A zero-card page-1 scrape is ambiguous —
+   coches.net intermittently serves Firecrawl a bot-challenge / partial /
+   empty render that also parses to zero cards — so page 1 is retried (up to
+   3 times) while the response lacks the genuine results-page chrome
+   (`"de segunda mano"`, `"Ordenar:"`, `"Limpiar filtros"`). If it still yields
+   nothing, the job fails as `NO_LISTINGS` only when a real results page *was*
+   reached (a legitimate empty scope) and as `SOURCE_UNAVAILABLE` otherwise
+   (source temporarily unreachable) — never silently.
 2. **Normalize** — deterministic quality rules; corrupt/implausible rows are
    excluded with a reason, never silently dropped.
 3. **Rank** — deterministic €/km + attribute scoring (no LLM involved).
@@ -34,8 +41,10 @@ Pipeline stages:
 
 There are **no fixed inputs**: every job's listings are the ads coches.net
 serves at run time, scraped live, and every vision result comes from a real
-model call. If the live source or the model fails, the job fails or honestly
-reports `no_evaluable` — the pipeline never invents or substitutes data.
+model call. If the live source or the model fails, the job fails (retrying a
+transient empty/blocked scrape first, then failing honestly as `NO_LISTINGS`
+or `SOURCE_UNAVAILABLE`) or honestly reports `no_evaluable` — the pipeline
+never invents or substitutes data.
 
 ## Live deployment
 
@@ -170,6 +179,12 @@ per listing for photo enrichment). The free plan is a moving 20 req/min
 window, so the client **paces** requests (`FIRECRAWL_MIN_INTERVAL_MS`, default
 3.5 s) and **retries 429s** honoring the server's `retry after Ns` hint
 (bounded to 3 attempts, then the job fails loudly with `FIRECRAWL_HTTP_429`).
+
+Separately from rate limits, coches.net occasionally returns a
+bot-challenge / partial / empty render that parses to zero cards. A zero-card
+**page 1** is therefore retried (up to 3 attempts) while the response doesn't
+look like a genuine results page — see the Scrape stage above — so a single
+flaky response no longer fails an otherwise-valid search.
 
 ### Legacy HTTP worker API (`convex/http.ts`) — kept for `--local` dev only
 
@@ -364,10 +379,13 @@ now the default vision provider).
 
 ## Tests
 
-`npm test` runs the Vitest suite (76 tests, all green, 10 files): live
+`npm test` runs the Vitest suite (80 tests, all green, 10 files): live
 Firecrawl card parsing (incl. `€/mes` financing-line handling, photo host
 filtering, pagination, 429 retry, request pacing, `minYear` filtering,
-defensive URL-encoding), normalize/dedup on synthetic live-card rows,
+defensive URL-encoding, and the zero-card page-1 retry — recovering from a
+transient empty render, distinguishing a real empty scope (`NO_LISTINGS`)
+from a blocked/empty source (`SOURCE_UNAVAILABLE`)), normalize/dedup on
+synthetic live-card rows,
 deterministic scoring, provider selection + health/auth header +
 vLLM-vs-OpenAI body compatibility, `maxPhotos` vision behavior against a
 mock OpenAI-compatible server (including `photo_type` normalization for
