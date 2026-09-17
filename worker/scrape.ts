@@ -110,15 +110,42 @@ export function regionSlug(region: string): string | null {
   return null;
 }
 
+/**
+ * Slugify a make/model the way coches.net builds its own catalog URLs
+ * (verified live against the site's make tag-cloud, 2026-09):
+ *   "Alfa Romeo"    -> "alfa_romeo"     (space -> underscore, NOT removed)
+ *   "Mercedes-Benz" -> "mercedes-benz"  (hyphen preserved)
+ *   "Citroën"       -> "citroen"        (diacritics stripped)
+ *   "DS 3"          -> "ds_3"
+ * The previous implementation did `.replace(/\s+/g, "")`, deleting the space
+ * so "Alfa Romeo" became "alfaromeo" — a slug coches.net does not recognize,
+ * so the category page returned zero cards and every multi-word (or accented)
+ * make silently "found nothing". This is the reported bug.
+ *
+ * Rule: lowercase, strip diacritics, drop anything that isn't [a-z0-9 _-],
+ * then collapse whitespace runs to a single underscore. Hyphens are kept.
+ * encodeURIComponent is unnecessary after this (output is already URL-safe)
+ * but harmless; we keep it as defense in depth for any unvalidated caller.
+ */
+export function cochesNetSlug(raw: string): string {
+  const stripped = raw
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // remove combining diacritical marks
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9 _-]/g, "") // drop URL-structural / stray chars
+    .replace(/\s+/g, "_"); // spaces -> underscores (coches.net convention)
+  return encodeURIComponent(stripped);
+}
+
 /** Category URL for a criteria set, e.g. https://www.coches.net/toyota/yaris/segunda-mano/barcelona/?p=5000 */
 export function categoryUrl(criteria: ScrapeCriteria, page = 1): string {
-  // encodeURIComponent defensively, even though validateCriteria (the
-  // authoritative gate before a job is ever created) already restricts
-  // make/model to a safe charset — this keeps the URL well-formed even if
-  // this function is ever called with unvalidated input (e.g. --local dev,
-  // a future caller, a test).
-  const make = encodeURIComponent(criteria.make.trim().toLowerCase().replace(/\s+/g, ""));
-  const model = encodeURIComponent(criteria.model.trim().toLowerCase().replace(/\s+/g, ""));
+  // Slugs follow coches.net's own catalog convention (see cochesNetSlug).
+  // validateCriteria (convex/criteria_lib.ts) is still the authoritative gate
+  // that restricts make/model to a safe charset before a job is created;
+  // cochesNetSlug additionally normalizes anything that slips through.
+  const make = cochesNetSlug(criteria.make);
+  const model = cochesNetSlug(criteria.model);
   const slug = regionSlug(criteria.region);
   const base = `https://www.coches.net/${make}/${model}/segunda-mano${slug ? `/${slug}` : ""}`;
   const q = new URLSearchParams();
@@ -160,10 +187,27 @@ export class FirecrawlSource implements ScrapeSource {
 
   async scrape(criteria: ScrapeCriteria): Promise<RawListing[]> {
     const seen = new Map<string, RawListing>();
+    let sawResultsPage = false;
     for (let pg = 1; pg <= this.maxPages; pg++) {
       const url = categoryUrl(criteria, pg);
-      const markdown = await this.fetchRaw(url, ["markdown"]);
-      const cards = parseCategoryCardsRaw(markdown, criteria);
+      let markdown = await this.fetchRaw(url, ["markdown"]);
+      let cards = parseCategoryCardsRaw(markdown, criteria);
+      // Page 1 with zero cards is ambiguous: either the search scope is
+      // genuinely empty, OR coches.net served Firecrawl a bot-challenge /
+      // partial render (which parses to zero cards too). A real results page
+      // always renders its own chrome ("de segunda mano", "Ordenar:",
+      // "Limpiar filtros") even when zero cars match; a challenge/empty
+      // render does not. So on page 1, retry a few times while the page
+      // doesn't look like a genuine coches.net results page — this is the
+      // transient NO_LISTINGS failure users hit even though listings exist.
+      if (pg === 1 && cards.length === 0) {
+        for (let attempt = 0; attempt < 3 && cards.length === 0 && !looksLikeResultsPage(markdown); attempt++) {
+          await sleep(this.minIntervalMs > 0 ? this.minIntervalMs : 1000);
+          markdown = await this.fetchRaw(url, ["markdown"]);
+          cards = parseCategoryCardsRaw(markdown, criteria);
+        }
+      }
+      if (looksLikeResultsPage(markdown)) sawResultsPage = true;
       if (cards.length === 0) break; // last page / empty scope
       for (const { listing: c, block } of cards) {
         // The capped category page can still render ads above the cap; drop them.
@@ -179,7 +223,15 @@ export class FirecrawlSource implements ScrapeSource {
       }
     }
     if (seen.size === 0) {
-      throw new Error("NO_LISTINGS: no se encontraron anuncios en coches.net para estos criterios");
+      // Distinguish the two zero-result cases so the frontend can message
+      // them differently: a genuine empty scope (we DID reach a real
+      // coches.net results page, it just had no cars) vs. a source problem
+      // (every fetch was a challenge/empty/partial render — the listings may
+      // well exist, coches.net just never served them to us).
+      if (sawResultsPage) {
+        throw new Error("NO_LISTINGS: no se encontraron anuncios en coches.net para estos criterios");
+      }
+      throw new Error("SOURCE_UNAVAILABLE: coches.net no devolvió una página de resultados válida (posible bloqueo temporal); reinténtalo");
     }
     // The category page carries no car photos (galleries are lazy-loaded), so
     // fetch each ad's own page to collect its real photo set. Bounded by the
@@ -295,6 +347,25 @@ export class FirecrawlSource implements ScrapeSource {
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * Does this Firecrawl markdown look like a genuine coches.net results page
+ * (as opposed to a bot-challenge / partial / empty render)? A real results
+ * page — even one matching zero cars — renders the site's own search chrome:
+ * the "… de segunda mano …" results heading, the "Ordenar:" sort control,
+ * and/or the "Limpiar filtros" reset link. A challenge/empty render carries
+ * none of these. Used to decide whether a zero-card page-1 scrape is a
+ * genuine empty scope (don't retry) or a transient failure (retry).
+ */
+export function looksLikeResultsPage(markdown: string): boolean {
+  const t = markdown.toLowerCase();
+  return (
+    t.includes("de segunda mano") ||
+    t.includes("ordenar:") ||
+    t.includes("limpiar filtros") ||
+    t.includes("guardar b") // "Guardar búsqueda" (accent-tolerant)
+  );
+}
 
 /**
  * Parse coches.net category cards from Firecrawl markdown.

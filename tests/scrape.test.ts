@@ -85,14 +85,85 @@ describe("category URL building", () => {
     );
   });
 
-  it("URL-encodes make/model defensively, even though validateCriteria (convex/criteria_lib.ts) already rejects URL-structural characters before a job reaches this function", () => {
+  it("strips URL-structural characters defensively, even though validateCriteria (convex/criteria_lib.ts) already rejects them before a job reaches this function", () => {
     // Simulates a caller that bypasses validateCriteria (e.g. --local dev,
     // a future direct call) — categoryUrl must not produce a malformed or
-    // reinterpreted URL even then.
+    // reinterpreted URL even then. cochesNetSlug drops any char outside
+    // [a-z0-9 _-], so path traversal / query injection cannot survive.
     const url = categoryUrl({ ...CRITERIA, make: "Toyota/../etc", model: "Yaris?x=1" }, 1);
     expect(url).not.toContain("/../");
-    expect(url).toContain("toyota%2F..%2Fetc");
-    expect(url).toContain("yaris%3Fx%3D1");
+    expect(url).not.toContain("?x=1");
+    expect(url).toBe("https://www.coches.net/toyotaetc/yarisx1/segunda-mano/barcelona/?maxPrice=5000&pg=1");
+  });
+
+  // Regression: the reported "app finds nothing" bug. Multi-word and accented
+  // makes/models must slugify the way coches.net's own catalog does (space ->
+  // underscore, hyphen kept, diacritics stripped) — the old code deleted
+  // spaces ("Alfa Romeo" -> "alfaromeo"), an unknown slug that returned zero
+  // listings for EVERY multi-word make.
+  it("builds coches.net-correct slugs for multi-word / accented / hyphenated makes and models", () => {
+    // [make, model, expected make slug, expected model slug] — verified live
+    // against coches.net's make tag-cloud (2026-09).
+    const cases: Array<[string, string, string, string]> = [
+      ["Alfa Romeo", "Giulietta", "alfa_romeo", "giulietta"],
+      ["Mercedes-Benz", "Clase A", "mercedes-benz", "clase_a"],
+      ["Citroën", "C3 Aircross", "citroen", "c3_aircross"],
+      ["Land-Rover", "Range Rover Evoque", "land-rover", "range_rover_evoque"],
+      ["DR Automobiles", "DR 3", "dr_automobiles", "dr_3"],
+      ["SsangYong", "Tivoli", "ssangyong", "tivoli"],
+      ["Toyota", "Yaris", "toyota", "yaris"],
+    ];
+    for (const [make, model, mSlug, moSlug] of cases) {
+      const url = categoryUrl({ make, model, maxPrice: 8000, region: "Madrid" }, 1);
+      expect(url, `${make} / ${model}`).toBe(
+        `https://www.coches.net/${mSlug}/${moSlug}/segunda-mano/madrid/?maxPrice=8000&pg=1`,
+      );
+      // The failure mode being guarded against: a slug with the space removed
+      // (only meaningful for makes that actually contain a space or hyphen).
+      if (/[\s-]/.test(make)) {
+        expect(url, `${make} must not collapse spaces`).not.toContain(
+          `/${make.toLowerCase().replace(/[\s-]/g, "")}/`,
+        );
+      }
+    }
+  });
+
+  // Randomized (fuzz) driver: pick random real coches.net makes — including
+  // multi-word ones — and random criteria, and assert the generated URL never
+  // regresses to a space-deleted slug (the bug) and is always well-formed.
+  it("never produces a space-deleted make slug for randomized real makes", () => {
+    // slug expectations sampled from coches.net's live make catalog (2026-09).
+    const MAKES: Array<[string, string]> = [
+      ["Alfa Romeo", "alfa_romeo"],
+      ["Aston Martin", "aston_martin"],
+      ["Asia Motors", "asia_motors"],
+      ["Mercedes-Benz", "mercedes-benz"],
+      ["Land-Rover", "land-rover"],
+      ["Rolls-Royce", "rolls-royce"],
+      ["DR Automobiles", "dr_automobiles"],
+      ["Iveco-Pegaso", "iveco-pegaso"],
+      ["SsangYong", "ssangyong"],
+      ["Citroën", "citroen"],
+      ["Toyota", "toyota"],
+      ["BMW", "bmw"],
+    ];
+    const REGIONS = ["Barcelona", "Madrid", "Valencia", "Cáceres", "Zaragoza"];
+    const rnd = (n: number) => Math.floor(Math.random() * n);
+    for (let i = 0; i < 200; i++) {
+      const [make, expected] = MAKES[rnd(MAKES.length)];
+      const region = REGIONS[rnd(REGIONS.length)];
+      const maxPrice = 500 + rnd(60) * 500;
+      const page = 1 + rnd(3);
+      const url = categoryUrl({ make, model: "X", maxPrice, region }, page);
+      const makeSeg = new URL(url).pathname.split("/")[1];
+      expect(makeSeg, `iter ${i}: ${make} -> ${url}`).toBe(expected);
+      // No make with a space/hyphen may collapse to a bare concatenation.
+      if (/[\s-]/.test(make)) {
+        expect(makeSeg).not.toBe(make.toLowerCase().replace(/[\s-]/g, ""));
+      }
+      expect(url).toContain(`maxPrice=${maxPrice}`);
+      expect(url).toContain(`pg=${page}`);
+    }
   });
 });
 
@@ -260,14 +331,63 @@ describe("Firecrawl source (live coches.net scrape)", () => {
     );
   });
 
-  it("throws NO_LISTINGS when the portal has no ads for the criteria", async () => {
+  it("throws NO_LISTINGS when the portal returns a real results page with no ads", async () => {
+    // A genuine coches.net results page renders its own search chrome
+    // ("de segunda mano", "Ordenar:", "Limpiar filtros") even when zero cars
+    // match — that's a legitimate empty scope, not a source failure.
+    const emptyResultsPage =
+      "# 0 VOLKSWAGEN Polo de segunda mano en Barcelona\n\nOrdenar:\n\nLimpiar filtros\n";
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ data: { markdown: "# 0 results" } }), {
+      new Response(JSON.stringify({ data: { markdown: emptyResultsPage } }), {
         status: 200,
         headers: { "content-type": "application/json" },
       }),
     );
-    await expect(new FirecrawlSource("test-key").scrape(CRITERIA)).rejects.toThrow("NO_LISTINGS");
+    await expect(new FirecrawlSource("test-key", undefined, 3, 0).scrape(CRITERIA)).rejects.toThrow("NO_LISTINGS");
+  });
+
+  it("throws SOURCE_UNAVAILABLE (not NO_LISTINGS) when every fetch is an empty/challenge render", async () => {
+    // A bot-challenge / empty / partial render carries none of the results
+    // chrome. After exhausting the page-1 retries it must be classified as a
+    // source problem, NOT 'no cars match' — the listings may well exist.
+    let calls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      calls++;
+      return new Response(JSON.stringify({ data: { markdown: "Just a moment...\n" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    await expect(new FirecrawlSource("test-key", undefined, 3, 0).scrape(CRITERIA)).rejects.toThrow("SOURCE_UNAVAILABLE");
+    // page-1 initial fetch + 3 retries = 4 attempts before giving up.
+    expect(calls).toBe(4);
+  });
+
+  it("retries a transient empty page-1 render and recovers when cards appear", async () => {
+    // First fetch is an empty/challenge render (zero cards, no chrome); the
+    // retry gets the real page. The job must succeed, not fail NO_LISTINGS.
+    let call = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      const body = JSON.parse((init as RequestInit).body as string);
+      const pg = /pg=(\d+)/.exec(body.url)?.[1] ?? "1";
+      if (pg === "1") {
+        call++;
+        // 1st page-1 fetch: transient empty render. 2nd: real cards.
+        const md = call === 1 ? "Just a moment...\n" : CATEGORY_MD;
+        return new Response(JSON.stringify({ data: { markdown: md } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ data: { markdown: "# 0 resultados" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    // maxPhotos:0 skips per-ad enrichment so we only exercise the category scrape.
+    const listings = await new FirecrawlSource("test-key", undefined, 3, 0).scrape({ ...CRITERIA, maxPhotos: 0 });
+    expect(listings.length).toBeGreaterThan(0);
+    expect(call).toBe(2); // proved it retried page 1 exactly once before recovering
   });
 
   it("paces requests by the configured minimum interval", async () => {

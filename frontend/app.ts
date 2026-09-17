@@ -129,6 +129,7 @@ function friendlyError(error: unknown): string {
     })
     .join("\n");
   if (haystack.includes("FREE_TIER_EXHAUSTED")) return "Your free search for today has already been used. Try again tomorrow.";
+  if (haystack.includes("SOURCE_UNAVAILABLE")) return "coches.net didn't respond properly just now (it may be temporarily blocking automated access). Your criteria are fine — please try again in a moment.";
   if (haystack.includes("NO_LISTINGS")) return "No listings matched those criteria. Try a broader search.";
   return "The search could not be created. Please try again.";
 }
@@ -249,7 +250,7 @@ function renderJobView(job: any) {
   wrap.setAttribute("aria-valuenow", String(pct));
   $("stage-text").textContent =
     status === "failed"
-      ? `Error: ${job.errorMsg ?? job.errorCode ?? "unknown"}`
+      ? `Error: ${friendlyError(job.errorMsg ?? job.errorCode ?? "unknown")}`
       : `${STAGE_LABELS[status] ?? status} — ${pct}%`;
 
   const c = job.counts ?? {};

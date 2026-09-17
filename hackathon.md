@@ -306,3 +306,39 @@ end-to-end (22 real listings scraped and ranked), vision ran via
 (both independent passes agreed) and valid enum values throughout,
 confirming the refined prompt still produces schema-compliant output in
 production.
+
+### 2026-09-17 - transient empty-scrape retry (NO_LISTINGS bug)
+User reported a "no listings" error for Volkswagen Polo / €4000 / Barcelona.
+Reproduced three ways that the pipeline is actually healthy: raw Firecrawl
+scrape of the category page returns 8 Polo cards on page 1 (all ≤ €4000, all
+parsed correctly by the production regex), a fresh-`userId` `api:create` job
+completed with 15 ranked listings, and the completed browser job renders the
+full ranking + vision tables. Re-running the same search in the browser
+showed the free-tier "already used" message, not "no listings" — confirming
+the reported error was the OTHER zero-result path.
+
+Root cause: `worker/scrape.ts` threw `NO_LISTINGS` the instant a page-1
+scrape parsed zero cards, with no retry. coches.net intermittently serves
+Firecrawl a bot-challenge / partial / empty render (which also parses to zero
+cards), so a single flaky response failed the whole job even though the
+listings exist. There was also no way to tell "genuinely no cars match" from
+"source temporarily unavailable".
+
+Fix: a real coches.net results page always renders its own search chrome
+("de segunda mano", "Ordenar:", "Limpiar filtros", "Guardar búsqueda") even
+when zero cars match; a challenge/empty render does not. Added
+`looksLikeResultsPage()` and, on a zero-card page 1, retry up to 3 times
+while the page doesn't look like a genuine results page. If all attempts
+still yield zero cards, throw `NO_LISTINGS` only when we DID reach a real
+results page (legitimate empty scope) and the new `SOURCE_UNAVAILABLE`
+otherwise. Frontend maps `SOURCE_UNAVAILABLE` to a "try again in a moment"
+message and now runs the async pipeline's `job.errorMsg` through
+`friendlyError` too (previously only synchronous create-mutation rejections
+were humanized). 80/80 tests passing (4 new: results-page-empty→NO_LISTINGS,
+all-challenge→SOURCE_UNAVAILABLE with a 4-attempt bound, and transient-empty
+page-1 recovery). `tsc --noEmit` clean, `npm run build` clean. Deployed
+(`npx convex deploy` + `npx @convex-dev/static-hosting deploy`) and verified
+live against `glorious-monitor-400`: the new message is present in the
+served bundle, and a fresh-`userId` VW Polo / €4000 / Barcelona job
+completed end-to-end (15 scraped, 15 valid, 0 excluded, 6 vision-evaluable,
+no error) — the retry does not disturb the happy path.
