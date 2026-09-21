@@ -45,16 +45,25 @@ export const create = mutation({
     const existingUser = await ctx.db.query("users").withIndex("by_userId", (q) => q.eq("userId", args.userId)).unique();
     if (!existingUser) {
       await ctx.db.insert("users", { userId: args.userId, createdAt: now });
-      await ctx.db.insert("credits", {
+    }
+
+    // Free tier = ONE search per UTC day. Grant today's credit lazily whenever
+    // the user has none dated today, instead of only at user-creation time —
+    // otherwise a returning user is locked out forever after their first search
+    // (yesterday's credit fails the `createdAt >= dayStart` filter and no new
+    // one is ever inserted). Returning users self-heal here on their next try.
+    let credits = (await ctx.db.query("credits").withIndex("by_user_kind", (q) => q.eq("userId", args.userId).eq("kind", "free_daily")).collect())
+      .filter((c) => c.createdAt >= dayStart);
+    if (credits.length === 0) {
+      const creditId = await ctx.db.insert("credits", {
         userId: args.userId,
         kind: "free_daily",
         amount: 1,
         createdAt: now,
       });
+      const granted = await ctx.db.get("credits", creditId);
+      if (granted) credits = [granted];
     }
-
-    const credits = (await ctx.db.query("credits").withIndex("by_user_kind", (q) => q.eq("userId", args.userId).eq("kind", "free_daily")).collect())
-      .filter((c) => c.createdAt >= dayStart);
     const available = credits.filter((c) => c.consumedByJobId === undefined).length;
     if (available < 1) {
       // Return (not throw): production Convex redacts thrown error messages, so
