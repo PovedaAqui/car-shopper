@@ -147,6 +147,8 @@ environment.
 | `TEXT_PROVIDER` | `openai` | Primary text-extraction provider: `openai` (default) or `local`. Only invoked when the deterministic regex parse can't find a card's price/km — reads only that card's own text, never invents a number. |
 | `OPENAI_TEXT_MODEL` | `gpt-4o-mini` | Model id for the OpenAI text-repair provider |
 | `VISION_MAX_PHOTOS_PER_CAR` | `1` | Default photos-per-ad cap for vision (and photo fetch) when a job doesn't set its own `maxPhotos`. Per-job override via the frontend Settings dialog / `maxPhotos` criteria field. |
+| `VISION_IMAGE_DETAIL` | `low` | Image `detail` sent to the vision model: `low` bills a flat ~2.8k tokens/image (gpt-4o-mini), vs `high`/`auto` high-detail tiling (~25k+ tokens/image). `low` keeps a full job within OpenAI's 200k tokens-per-minute cap; raise to `high` only with a TPM-generous key. |
+| `LLM_MAX_RETRIES` | `4` | Max backoff retries on a `429`/`503` from the chat/completions endpoint before a call throws `rate_limited`. Retries honor the server's `Retry-After` header, else exponential backoff + jitter. |
 | `FIRECRAWL_API_KEY` | unset | **Required** — Firecrawl runtime key used to scrape coches.net live; never commit it |
 | `FIRECRAWL_BASE_URL` | `https://api.firecrawl.dev/v1` | Optional Firecrawl-compatible endpoint |
 | `FIRECRAWL_MIN_INTERVAL_MS` | `3500` | Client-side pacing between Firecrawl requests (free plan: 20 req/min) |
@@ -165,6 +167,7 @@ npx convex env set VISION_PROVIDER openai
 npx convex env set TEXT_PROVIDER openai
 npx convex env set VISION_MODE local_inference_only
 npx convex env set VISION_MAX_PHOTOS_PER_CAR 1
+npx convex env set VISION_IMAGE_DETAIL low
 ```
 
 `--local` one-shot criteria (dev only, reads from `.env.worker` / shell env,
@@ -185,6 +188,26 @@ bot-challenge / partial / empty render that parses to zero cards. A zero-card
 **page 1** is therefore retried (up to 3 attempts) while the response doesn't
 look like a genuine results page — see the Scrape stage above — so a single
 flaky response no longer fails an otherwise-valid search.
+
+### OpenAI vision rate limits (tokens-per-minute)
+
+The vision stage runs two independent passes per listing, so a 20+ car job
+issues 40+ `gpt-4o-mini` image calls in a burst. OpenAI's default cap is a
+moving **200k tokens-per-minute** window, and high-detail image tiling bills
+~25k+ input tokens *per image* — enough to exhaust the TPM budget in seconds
+and turn a `429` into a blanket `no_evaluable` report if left unhandled. Two
+defenses keep vision working:
+
+- **Low image detail** (`VISION_IMAGE_DETAIL`, default `low`) bills a flat
+  ~2.8k tokens/image instead of ~25k+, ~9× cheaper, keeping a full job inside
+  the TPM window.
+- **429/503 backoff** (`LLM_MAX_RETRIES`, default 4) retries a rate-limited
+  chat/completions call with exponential backoff + jitter, honoring the
+  server's `Retry-After` header, instead of degrading straight to
+  `no_evaluable`. Only a persisting limit throws a typed `rate_limited` error.
+
+A listing is still honestly marked `no_evaluable` when it genuinely has no
+usable photos — that is expected, not a rate-limit artifact.
 
 ### Legacy HTTP worker API (`convex/http.ts`) — kept for `--local` dev only
 

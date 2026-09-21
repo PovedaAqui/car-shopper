@@ -342,3 +342,40 @@ live against `glorious-monitor-400`: the new message is present in the
 served bundle, and a fresh-`userId` VW Polo / €4000 / Barcelona job
 completed end-to-end (15 scraped, 15 valid, 0 excluded, 6 vision-evaluable,
 no error) — the retry does not disturb the happy path.
+
+### 2026-09-21 - free-tier daily credit lockout fix
+
+User reported the app showing "Your free search for today has already been
+used. Try again tomorrow." on every attempt. Root cause: the `free_daily`
+credit was inserted only at user creation (inside `if (!existingUser)`), while
+the availability check filters credits to `createdAt >= today's UTC midnight`.
+A returning user therefore never received a new credit and yesterday's failed
+the day filter, so `create` returned `FREE_TIER_EXHAUSTED` permanently — a
+one-time-ever free search masquerading as a daily one; "Try again tomorrow"
+never came true. Fix (`convex/api.ts`): decoupled the grant from user
+creation — on each `create`, when the user has zero credits dated today, insert
+today's credit then proceed. Returning users self-heal on their next attempt
+(their stale credit predates today's window, so no backfill needed). Certified
+live on prod: two same-day `api:create` calls under a fresh `userId` → call 1
+`claimed`, call 2 `FREE_TIER_EXHAUSTED`. `tsc --noEmit` clean; suite passes.
+
+### 2026-09-21 - vision 429/TPM fix (blanket "not evaluable")
+
+User reported the report marking every listing's visual check "not evaluable".
+Root cause was NOT misconfiguration (`VISION_PROVIDER=openai` + key was correct):
+the live `visionResults` rows showed `http_error: HTTP 429: Rate limit reached
+for gpt-4o-mini ... tokens per min (TPM): Limit 200000, Used 200000`. Two
+compounding causes: (1) a `429` was mapped straight to `no_evaluable` with no
+retry; (2) high-detail image tiling billed ~25k+ input tokens per image (one
+call logged 26,394), so ~24 listings × 2 passes blew the 200k TPM window in
+seconds. Fix (`worker/providers.ts`, `worker/vision.ts`): retry `429`/`503`
+with exponential backoff + jitter honoring `Retry-After` (bounded by
+`LLM_MAX_RETRIES`, default 4; only a persisting limit throws the new typed
+`rate_limited`), and send images with `detail: "low"` (~2.8k tokens/image,
+~9× cheaper), overridable via `VISION_IMAGE_DETAIL`. Added 2 provider tests
+(429-retry-then-succeed, give-up-then-`rate_limited`); 82/82 pass, `tsc` clean.
+Certified live on prod: fresh VW Golf search → 24 listings, 14 vision-evaluable,
+the residual `no_evaluable` rows all genuine `sin fotos`, zero 429s. Recorded a
+subtitled two-example browser demo (VW Golf / Madrid and Seat Ibiza / Barcelona)
+with motion (Ken Burns pan/zoom); artifacts under `~/car-shopper-demo/`,
+gitignored working dir, not committed.
