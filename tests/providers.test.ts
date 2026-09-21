@@ -166,6 +166,59 @@ describe("providers", () => {
     }
   });
 
+  it("chat: retries HTTP 429 with backoff, then succeeds (rate-limit recovery)", async () => {
+    let hits = 0;
+    const server = http.createServer((req, res) => {
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      req.on("end", () => {
+        hits++;
+        if (hits <= 2) {
+          res.writeHead(429, { "content-type": "application/json", "retry-after": "0" });
+          res.end(JSON.stringify({ error: { message: "Rate limit reached (TPM)" } }));
+          return;
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } }));
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const port = (server.address() as any).port;
+    try {
+      const result = await chat(
+        { provider: "openai_compat", baseUrl: `http://127.0.0.1:${port}/v1`, model: "m", timeoutMs: 5000 },
+        [{ role: "user", content: "hi" }]
+      );
+      expect(result.content).toBe("ok");
+      expect(hits).toBe(3); // 2 rate-limited + 1 success, not an immediate no_evaluable
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  it("chat: gives up after LLM_MAX_RETRIES on persistent 429 and throws rate_limited", async () => {
+    const prev = process.env.LLM_MAX_RETRIES;
+    process.env.LLM_MAX_RETRIES = "1";
+    const server = http.createServer((req, res) => {
+      req.on("data", () => {});
+      req.on("end", () => {
+        res.writeHead(429, { "content-type": "application/json", "retry-after": "0" });
+        res.end(JSON.stringify({ error: { message: "Rate limit reached (TPM)" } }));
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const port = (server.address() as any).port;
+    try {
+      await expect(
+        chat({ provider: "openai_compat", baseUrl: `http://127.0.0.1:${port}/v1`, model: "m", timeoutMs: 5000 }, [{ role: "user", content: "hi" }])
+      ).rejects.toMatchObject({ kind: "rate_limited" });
+    } finally {
+      if (prev === undefined) delete process.env.LLM_MAX_RETRIES;
+      else process.env.LLM_MAX_RETRIES = prev;
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
   it("defaultModels: OpenAI is primary by default when OPENAI_API_KEY is set", () => {
     process.env.OPENAI_API_KEY = "sk-test";
     const { visionPrimary, visionFallback } = defaultModels();

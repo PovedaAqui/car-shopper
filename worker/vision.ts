@@ -38,6 +38,18 @@ export function defaultMaxPhotosPerCar(): number {
   return Number.isInteger(n) && n >= 0 ? n : 1;
 }
 
+/**
+ * Image detail sent to the vision model. "low" makes gpt-4o-mini bill a flat
+ * ~2.8k tokens per image instead of high-detail tiling (~25k+ tokens/image),
+ * which is what pushed the batch over OpenAI's 200k tokens-per-minute cap and
+ * turned every listing into a 429 → no_evaluable. Override with
+ * VISION_IMAGE_DETAIL=high when a TPM-generous key wants finer inspection.
+ */
+export function imageDetail(): "low" | "high" | "auto" {
+  const d = (process.env.VISION_IMAGE_DETAIL ?? "low").toLowerCase();
+  return d === "high" || d === "auto" ? d : "low";
+}
+
 const SCHEMA_HINT =
   '{"photos_analyzed": int, "photo_type": "profesional|amateur|sin_fotos|stock_sospechoso", "exterior_state": "bien|regular|mal|no_evaluable", "interior_state": "bien|regular|mal|no_evaluable|sin_ver", "exterior_details": string (cite specific visible evidence for exterior_state, e.g. \"scratch on rear bumper, curbed front-left wheel\" — not a generic summary), "cleanliness": "limpio|regular|descuidado|no_evaluable", "color": string|null, "red_flags": string[]}';
 
@@ -191,12 +203,12 @@ async function analyzeWithModel(
   // Note: price is deliberately NOT included below — including it risks
   // anchoring the model toward "cheap therefore worse" or "expensive
   // therefore fine" reasoning instead of judging only what's visible.
-  const userContent: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [
+  const userContent: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string; detail?: "low" | "high" | "auto" } }> = [
     {
       type: "text",
       text: `Listing ${listing.adId}: ${listing.title} (${listing.km} km, year ${listing.year ?? "unknown"}). Apply the rubric above to the photos below.`,
     },
-    ...photos.map((u) => ({ type: "image_url" as const, image_url: { url: u } })),
+    ...photos.map((u) => ({ type: "image_url" as const, image_url: { url: u, detail: imageDetail() } })),
   ];
 
   try {

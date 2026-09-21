@@ -39,7 +39,7 @@ export interface ChatMessage {
 
 export type ContentPart =
   | { type: "text"; text: string }
-  | { type: "image_url"; image_url: { url: string } };
+  | { type: "image_url"; image_url: { url: string; detail?: "low" | "high" | "auto" } };
 
 export interface ChatResult {
   content: string | null;
@@ -57,6 +57,7 @@ export type ProviderErrorKind =
   | "timeout"
   | "out_of_memory"
   | "model_unavailable"
+  | "rate_limited"
   | "http_error"
   | "not_configured";
 
@@ -226,6 +227,21 @@ function timeoutSignal(ms: number): AbortSignal {
   return c.signal;
 }
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms).unref?.());
+
+/**
+ * Parse a Retry-After header (RFC 7231): either delta-seconds or an HTTP-date.
+ * Returns milliseconds to wait, or null if absent/unparseable.
+ */
+function parseRetryAfter(header: string | null): number | null {
+  if (!header) return null;
+  const secs = Number(header);
+  if (Number.isFinite(secs)) return Math.max(0, secs * 1000);
+  const when = Date.parse(header);
+  if (Number.isFinite(when)) return Math.max(0, when - Date.now());
+  return null;
+}
+
 /** GET {baseUrl}/models — health check + model discovery. */
 export async function checkHealth(cfg: ModelConfig): Promise<Health> {
   const url = `${cfg.baseUrl.replace(/\/$/, "")}/models`;
@@ -264,48 +280,65 @@ export async function chat(cfg: ModelConfig, messages: ChatMessage[], opts?: { m
     body.chat_template_kwargs = { enable_thinking: false };
   }
   const doRequest = async (b: Record<string, unknown>): Promise<ChatResult> => {
-    const started = Date.now();
-    let res: Response;
-    try {
-      res = await fetch(`${cfg.baseUrl.replace(/\/$/, "")}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {}),
-        },
-        body: JSON.stringify(b),
-        signal: timeoutSignal(cfg.timeoutMs ?? DEFAULT_TIMEOUT),
-      });
-    } catch (e: any) {
-      if (e?.name === "AbortError") throw new ProviderError("timeout", `request timed out after ${cfg.timeoutMs ?? DEFAULT_TIMEOUT}ms`);
-      throw new ProviderError("model_unavailable", `endpoint unreachable: ${e?.message ?? e}`);
+    const maxAttempts = Number(process.env.LLM_MAX_RETRIES ?? 4);
+    let attempt = 0;
+    for (;;) {
+      const started = Date.now();
+      let res: Response;
+      try {
+        res = await fetch(`${cfg.baseUrl.replace(/\/$/, "")}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {}),
+          },
+          body: JSON.stringify(b),
+          signal: timeoutSignal(cfg.timeoutMs ?? DEFAULT_TIMEOUT),
+        });
+      } catch (e: any) {
+        if (e?.name === "AbortError") throw new ProviderError("timeout", `request timed out after ${cfg.timeoutMs ?? DEFAULT_TIMEOUT}ms`);
+        throw new ProviderError("model_unavailable", `endpoint unreachable: ${e?.message ?? e}`);
+      }
+      const latencyMs = Date.now() - started;
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        const lower = text.toLowerCase();
+        // Rate limit / transient overload: back off and retry instead of
+        // immediately degrading to no_evaluable. Honors Retry-After when the
+        // server sends it; otherwise exponential backoff with jitter.
+        if ((res.status === 429 || res.status === 503) && attempt < maxAttempts) {
+          const retryAfter = parseRetryAfter(res.headers.get("retry-after"));
+          const backoff = retryAfter ?? Math.min(30_000, 1000 * 2 ** attempt) + Math.floor(Math.random() * 500);
+          attempt++;
+          await sleep(backoff);
+          continue;
+        }
+        if (res.status === 429 || res.status === 503) {
+          throw new ProviderError("rate_limited", `HTTP ${res.status} after ${attempt} retries: ${text.slice(0, 200)}`);
+        }
+        if (lower.includes("out of memory") || lower.includes("cuda oom")) {
+          throw new ProviderError("out_of_memory", text.slice(0, 200));
+        }
+        if (res.status === 404 && lower.includes("model")) {
+          throw new ProviderError("model_unavailable", text.slice(0, 200));
+        }
+        if (res.status === 415 || lower.includes("image") && lower.includes("not supported")) {
+          throw new ProviderError("unsupported_vision", text.slice(0, 200));
+        }
+        throw new ProviderError("http_error", `HTTP ${res.status}: ${text.slice(0, 200)}`);
+      }
+      const data: any = await res.json();
+      const choice = data?.choices?.[0];
+      const msg = choice?.message ?? {};
+      return {
+        content: msg.content ?? null,
+        reasoning: msg.reasoning ?? undefined,
+        finishReason: choice?.finish_reason ?? "unknown",
+        inputTokens: data?.usage?.prompt_tokens,
+        outputTokens: data?.usage?.completion_tokens,
+        latencyMs,
+      };
     }
-    const latencyMs = Date.now() - started;
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      const lower = text.toLowerCase();
-      if (lower.includes("out of memory") || lower.includes("cuda oom")) {
-        throw new ProviderError("out_of_memory", text.slice(0, 200));
-      }
-      if (res.status === 404 && lower.includes("model")) {
-        throw new ProviderError("model_unavailable", text.slice(0, 200));
-      }
-      if (res.status === 415 || lower.includes("image") && lower.includes("not supported")) {
-        throw new ProviderError("unsupported_vision", text.slice(0, 200));
-      }
-      throw new ProviderError("http_error", `HTTP ${res.status}: ${text.slice(0, 200)}`);
-    }
-    const data: any = await res.json();
-    const choice = data?.choices?.[0];
-    const msg = choice?.message ?? {};
-    return {
-      content: msg.content ?? null,
-      reasoning: msg.reasoning ?? undefined,
-      finishReason: choice?.finish_reason ?? "unknown",
-      inputTokens: data?.usage?.prompt_tokens,
-      outputTokens: data?.usage?.completion_tokens,
-      latencyMs,
-    };
   };
 
   let first = await doRequest(body);
